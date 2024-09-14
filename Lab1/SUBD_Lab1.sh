@@ -5,7 +5,7 @@ read -p "Введите имя схемы: " SCHEMA_NAME
 
 # Проверяем, является ли имя схемы валидным в соответствии с правилами PostgreSQL
 if [[ ! "$SCHEMA_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_$]*$ ]]; then
-    echo "Название схемы '$SCHEMA_NAME' не является валидным в postgresql"
+    echo "Название схемы '$SCHEMA_NAME' не является валидным в PostgreSQL"
     exit 1
 fi
 
@@ -30,48 +30,47 @@ END IF;
 RAISE NOTICE 'Номер | Имя ограничения                | Тип        | Имя таблицы                    | Имя столбца                    | Текст ограничения              ';
 RAISE NOTICE '------|--------------------------------|------------|--------------------------------|--------------------------------|--------------------------------';
 
+-- Основной цикл для вывода ограничений
 FOR r IN
-    SELECT
+    WITH constraints AS (
+        -- Получаем CHECK ограничения
+        SELECT
+            conname AS имя_ограничения,
+            'CHECK' AS тип,
+            relname AS имя_таблицы,
+            attname AS имя_столбца,
+            pg_get_constraintdef(pg_constraint.oid) AS текст_ограничения
+        FROM
+            pg_constraint
+            JOIN pg_class ON conrelid = pg_class.oid
+            JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid
+            JOIN pg_attribute ON attnum = ANY(conkey) AND attrelid = conrelid
+        WHERE
+            nspname = schema_name AND contype = 'c'
+        
+        UNION ALL
+        
+        -- Получаем NOT NULL ограничения
+        SELECT
+            'attnotnull' AS имя_ограничения,
+            'NOT NULL' AS тип,
+            relname AS имя_таблицы,
+            attname AS имя_столбца,
+            'IS NOT NULL' AS текст_ограничения
+        FROM
+            pg_attribute
+            JOIN pg_class ON attrelid = pg_class.oid
+            JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid
+        WHERE
+            nspname = schema_name AND attnotnull = TRUE
+    )
+    SELECT 
         ROW_NUMBER() OVER () AS номер,
-        conname AS имя_ограничения,
-        CASE WHEN contype = 'c' THEN 'CHECK'
-            END AS тип,
-        relname AS имя_таблицы,
-        attname AS имя_столбца,
-        pg_get_constraintdef(pg_catalog.pg_constraint.oid) AS текст_ограничения
-    FROM
-        pg_catalog.pg_constraint
-        JOIN
-        pg_catalog.pg_class ON conrelid = pg_catalog.pg_class.oid
-        JOIN
-        pg_catalog.pg_namespace ON pg_catalog.pg_class.relnamespace = pg_catalog.pg_namespace.oid
-        JOIN
-        pg_catalog.pg_attribute ON attnum = ANY(conkey) AND attrelid = conrelid
-    WHERE
-        nspname = schema_name AND contype = 'c' -- NOT NULL находится в pg_attribute
-
-    UNION ALL
-
-    SELECT
-        ROW_NUMBER() OVER () AS номер,
-        'attnotnull' AS имя_ограничения, -- attnotnull - булевый атрибут в pg_attribute
-        'NOT NULL' AS тип,
-        relname AS имя_таблицы,
-        attname AS имя_столбца,
-        'IS NOT NULL' AS текст_ограничения
-    FROM
-        pg_catalog.pg_attribute
-        JOIN
-        pg_catalog.pg_class ON attrelid = pg_catalog.pg_class.oid
-        JOIN
-        pg_catalog.pg_namespace ON pg_catalog.pg_class.relnamespace = pg_catalog.pg_namespace.oid
-    WHERE
-        nspname = schema_name AND attnotnull = TRUE
-
-    ORDER BY номер
-
+        * 
+    FROM 
+        constraints
     LOOP
-    -- Форматирование вывода строк
+        -- Форматирование вывода строк
         RAISE NOTICE '% | % | % | % | % | %',
             RPAD(r.номер::text, 5),
             RPAD(r.имя_ограничения, 30),
