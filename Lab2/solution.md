@@ -112,10 +112,42 @@ mkdir -p $HOME/oka84
 chown $PGUSERNAME:$PGUSERNAME $HOME/oka84
 ```
 
-`postgresql.conf`:
+В `postgresql.conf`:
 `archive_mode` - включает архивирование WAL файлов.
 `archive_command` - команда, которая будет выполняться для архивирования WAL файлов. В данном случае, копируем файл в директорию $HOME/oka84.
 ```conf
 archive_mode = on
 archive_command = 'cp %p $HOME/oka84/%f'
+```
+
+**Формат лог-файлов**:
+В `postgresql.conf`:
+`log_destination` - куда писать логи. В данном случае, в файл csv.
+`logging_collector` - включает сборщик логов и позволяет перенаправлять в файлы.
+`log_directory` - директория для логов. Оставляем по умолчанию.
+`log_filename` - формат имени файла лога. Ставим формат csv.
+
+```conf
+log_destination = 'csvlog'
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.csv'
+```
+
+**Уровень сообщений лога**:
+`log_min_messages` - минимальный уровень сообщений, которые будут записаны в лог. В данном случае, только ошибки и выше.
+```conf
+log_min_messages = error
+```
+
+**Дополнительно логировать**:
+`log_connections` - логировать подключения.
+`log_disconnections` - логировать отключения. Оба параметра используем для отслеживания завершения сессий.
+`log_duration` - логировать продолжительность выполнения команд.
+`log_min_duration_statement` - минимальная продолжительность выполнения команды, которая будет логироваться. В данном случае, 0 - логировать все команды.
+```conf
+log_connections = on
+log_disconnections = on
+log_duration = on
+log_min_duration_statement = 0
 ```
