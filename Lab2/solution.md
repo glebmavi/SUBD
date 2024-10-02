@@ -399,31 +399,88 @@ SELECT
     relname
 FROM
     pg_class
-    LEFT JOIN pg_tablespace ON pg_tablespace.oid = reltablespace;
+    JOIN pg_tablespace ON pg_tablespace.oid = reltablespace;
+```
+```output
+ tablespace |                 relname
+------------+-----------------------------------------
+ pg_global  | pg_toast_1262
+ pg_global  | pg_toast_1262_index
+ pg_global  | pg_toast_2964
+ pg_global  | pg_toast_2964_index
+ pg_global  | pg_toast_1213
+ pg_global  | pg_toast_1213_index
+ pg_global  | pg_toast_1260
+ pg_global  | pg_toast_1260_index
+ pg_global  | pg_toast_2396
+ pg_global  | pg_toast_2396_index
+ pg_global  | pg_toast_6000
+ pg_global  | pg_toast_6000_index
+ pg_global  | pg_toast_3592
+ pg_global  | pg_toast_3592_index
+ pg_global  | pg_toast_6243
+ pg_global  | pg_toast_6243_index
+ pg_global  | pg_toast_6100
+ pg_global  | pg_toast_6100_index
+ pg_global  | pg_database_datname_index
+ pg_global  | pg_database_oid_index
+ pg_global  | pg_db_role_setting_databaseid_rol_index
+ pg_global  | pg_tablespace_oid_index
+ pg_global  | pg_tablespace_spcname_index
+ pg_global  | pg_authid_rolname_index
+ pg_global  | pg_authid_oid_index
+ pg_global  | pg_auth_members_oid_index
+ pg_global  | pg_auth_members_role_member_index
+ pg_global  | pg_auth_members_member_role_index
+ pg_global  | pg_auth_members_grantor_index
+ pg_global  | pg_shdepend_depender_index
+ pg_global  | pg_shdepend_reference_index
+ pg_global  | pg_shdescription_o_c_index
+ pg_global  | pg_replication_origin_roiident_index
+ pg_global  | pg_replication_origin_roname_index
+ pg_global  | pg_shseclabel_object_index
+ pg_global  | pg_parameter_acl_parname_index
+ pg_global  | pg_parameter_acl_oid_index
+ pg_global  | pg_subscription_oid_index
+ pg_global  | pg_subscription_subname_index
+ pg_global  | pg_authid
+ mqb89      | temp_enrollments
+ utr38      | temp_course_statistics
+ pg_global  | pg_subscription
+ pg_global  | pg_database
+ pg_global  | pg_db_role_setting
+ pg_global  | pg_tablespace
+ pg_global  | pg_auth_members
+ pg_global  | pg_shdepend
+ pg_global  | pg_shdescription
+ pg_global  | pg_replication_origin
+ pg_global  | pg_shseclabel
+ pg_global  | pg_parameter_acl
+(52 строки)
 ```
 
 
 Выведем все объекты созданные новым пользователем:
 ```sql
 SELECT
-    oid, relname, reltablespace
+    relname, spcname AS tablespace
 FROM
-    pg_class
+    pg_class LEFT JOIN pg_tablespace ON pg_tablespace.oid = reltablespace
 WHERE
     relowner = (SELECT oid FROM pg_roles WHERE rolname = 'newuser');
 ```
 ```output
-  oid  |           relname            | reltablespace 
--------+------------------------------+---------------
- 16395 | students_student_id_seq      |             0
- 16396 | students                     |             0
- 16400 | students_pkey                |             0
- 16402 | courses_course_id_seq        |             0
- 16403 | courses                      |             0
- 16407 | courses_pkey                 |             0
- 16433 | temp_enrollments_temp_id_seq |             0
- 16434 | temp_enrollments             |         16389
- 16438 | temp_enrollments_pkey        |             0
- 16440 | temp_course_statistics       |         16390
+           relname            | tablespace 
+------------------------------+------------
+ students_student_id_seq      |
+ students                     |
+ students_pkey                |
+ courses_course_id_seq        |
+ courses                      |
+ courses_pkey                 |
+ temp_enrollments_temp_id_seq |
+ temp_enrollments             | mqb89
+ temp_enrollments_pkey        |
+ temp_course_statistics       | utr38
 (10 строк)
 ```
