@@ -1,14 +1,20 @@
+Определим переменные окружения:
+```bash
 PGUSERNAME=postgres1
 PGDATA=$HOME/khk43
 PGENCODE=ISO_8859_5
 PGLOCALE=ru_RU.ISO8859-5
 export PGUSERNAME PGDATA PGENCODE PGLOCALE
+```
 
 # Этап 1. Инициализация кластера БД
 
+Создаем директорию кластера и инициализируем базу данных:
+```bash
 mkdir -p $PGDATA
 chown $PGUSERNAME $PGDATA
 initdb -D $PGDATA --encoding=$PGENCODE --locale=$PGLOCALE --username=$PGUSERNAME
+```
 
 ![Step 1 result](image.png)
 
@@ -16,8 +22,10 @@ initdb -D $PGDATA --encoding=$PGENCODE --locale=$PGLOCALE --username=$PGUSERNAME
 
 Скачиваем конфигурационные файлы:
 
+```bash
 scp postgres1@pg167:khk43/postgresql.conf ~
 scp postgres1@pg167:khk43/pg_hba.conf ~
+```
 
 ## Способы подключения:
 Редактируем файл `postgresql.conf`:
@@ -109,7 +117,7 @@ commit_delay = 0
 Создадим директорию для WAL файлов:
 ```bash
 mkdir -p $HOME/oka84
-chown $PGUSERNAME:$PGUSERNAME $HOME/oka84
+chown $PGUSERNAME $HOME/oka84
 ```
 
 В `postgresql.conf`:
@@ -282,7 +290,140 @@ postgres=#
 
 ## Создание табличных пространств
 
+```bash
+mkdir -p /var/db/postgres1/mqb89
+mkdir -p /var/db/postgres1/utr38
+```
+
 ```sql
 CREATE TABLESPACE mqb89 LOCATION '/var/db/postgres1/mqb89';
 CREATE TABLESPACE utr38 LOCATION '/var/db/postgres1/utr38';
+```
+
+**Проверка**:
+```sql
+\db
+```
+```output
+postgres=# \db
+           Список табличных пространств
+    Имя     | Владелец  |      Расположение
+------------+-----------+-------------------------
+ mqb89      | postgres1 | /var/db/postgres1/mqb89
+ pg_default | postgres1 | 
+ pg_global  | postgres1 |
+ utr38      | postgres1 | /var/db/postgres1/utr38
+(4 строки)
+```
+
+## Создание базы данных
+
+```sql
+CREATE DATABASE uglyredbird TEMPLATE template0;
+```
+
+**Проверка**:
+```sql
+\l
+```
+```output
+postgres=# \l
+                                                                Список баз данных
+     Имя     | Владелец  | Кодировка  | Провайдер локали |   LC_COLLATE    |    LC_CTYPE     | локаль ICU | Правила ICU |      Права доступа      
+-------------+-----------+------------+------------------+-----------------+-----------------+------------+-------------+-------------------------
+ postgres    | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | 
+ template0   | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | =c/postgres1           +
+             |           |            |                  |                 |                 |            |             | postgres1=CTc/postgres1
+ template1   | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | =c/postgres1           +
+             |           |            |                  |                 |                 |            |             | postgres1=CTc/postgres1
+ uglyredbird | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             |
+(4 строки)
+```
+
+## Создание роли
+
+```sql
+CREATE ROLE newuser WITH LOGIN;  --Пароль не нужен так как используем подключение peer
+-- Предоставить необходимые права
+GRANT CONNECT, CREATE ON DATABASE uglyredbird TO newuser;
+GRANT CREATE ON TABLESPACE mqb89 TO newuser;
+GRANT CREATE ON TABLESPACE utr38 TO newuser;
+```
+
+## От имени новой роли (не администратора) произвести наполнение ВСЕХ созданных баз тестовыми наборами данных. ВСЕ табличные пространства должны использоваться по назначению.
+Запускаем скрипт наполнения базы от имени нового пользователя:
+```bash
+psql -p 9555 -d uglyredbird -U newuser -f $HOME/creating.sql
+```
+
+Запускаем скрипт наполнения таблиц от имени нового пользователя:
+```bash
+psql -p 9555 -d uglyredbird -U newuser -f $HOME/inserting.sql
+```
+
+**Проверка**:
+```sql
+SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
+```
+```output
+uglyredbird=> SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
+ schemaname |       tablename        | tableowner | tablespace | hasindexes | hasrules | hastriggers | rowsecurity 
+------------+------------------------+------------+------------+------------+----------+-------------+-------------
+ main       | students               | newuser    |            | t          | f        | f           | f
+ main       | courses                | newuser    |            | t          | f        | f           | f
+ pg_temp_3  | temp_enrollments       | newuser    | mqb89      | t          | f        | f           | f
+ pg_temp_3  | temp_course_statistics | newuser    | utr38      | f          | f        | f           | f
+(4 строки)
+```
+
+## Вывести список всех табличных пространств кластера и содержащиеся в них объекты
+Выведем все табличные пространства
+```sql
+SELECT * FROM pg_tablespace;
+```
+```output
+uglyredbird=> SELECT * FROM pg_tablespace;
+  oid  |  spcname   | spcowner |                   spcacl                    | spcoptions 
+-------+------------+----------+---------------------------------------------+------------
+  1663 | pg_default |       10 |                                             |
+  1664 | pg_global  |       10 |                                             |
+ 16389 | mqb89      |       10 | {postgres1=C/postgres1,newuser=C/postgres1} |
+ 16390 | utr38      |       10 | {postgres1=C/postgres1,newuser=C/postgres1} |
+(4 строки)
+```
+
+Выведем все объекты в табличных пространствах
+```sql
+SELECT
+    spcname AS tablespace,
+    relname
+FROM
+    pg_class
+    LEFT JOIN pg_tablespace ON pg_tablespace.oid = reltablespace;
+```
+
+
+Выведем все объекты созданные новым пользователем:
+```sql
+SELECT
+    oid, relname, reltablespace
+FROM
+    pg_class
+WHERE
+    relowner = (SELECT oid FROM pg_roles WHERE rolname = 'newuser');
+```
+```output
+  oid  |           relname            | reltablespace 
+-------+------------------------------+---------------
+ 16395 | students_student_id_seq      |             0
+ 16396 | students                     |             0
+ 16400 | students_pkey                |             0
+ 16402 | courses_course_id_seq        |             0
+ 16403 | courses                      |             0
+ 16407 | courses_pkey                 |             0
+ 16433 | temp_enrollments_temp_id_seq |             0
+ 16434 | temp_enrollments             |         16389
+ 16438 | temp_enrollments_pkey        |             0
+ 16440 | temp_course_statistics       |         16390
+(10 строк)
 ```
