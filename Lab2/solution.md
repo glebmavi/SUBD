@@ -151,3 +151,138 @@ log_disconnections = on
 log_duration = on
 log_min_duration_statement = 0
 ```
+
+## Запуск сервера БД
+
+Загрузим обратно конфигурационные файлы:
+```bash
+scp ~/postgresql.conf postgres1@pg167:khk43
+scp ~/pg_hba.conf postgres1@pg167:khk43
+```
+
+Запускаем сервер:
+```bash
+pg_ctl -D /var/db/postgres1/khk43 -l файл_журнала start
+```
+
+## Проверка всех параметров
+
+**Статус сервера**:
+```bash
+pg_ctl -D ~/khk43 status
+```
+```output
+[postgres1@pg167 ~]$ pg_ctl -D ~/khk43 status
+pg_ctl: сервер работает (PID: 63080)
+/usr/local/bin/postgres "-D" "/var/db/postgres1/khk43"
+```
+
+
+**Остановка сервера**:
+```bash
+pg_ctl -D ~/khk43 stop -m fast
+```
+
+
+**Подключение локально**:
+```bash
+psql -p 9555 -d postgres
+```
+```output
+[postgres1@pg167 ~]$ psql -p 9555 -d postgres
+psql (16.4)
+Введите "help", чтобы получить справку.
+
+postgres=#
+```
+
+**Подключение удаленно**:
+Создадим нового пользователя PostgreSQL с паролем:
+```sql
+CREATE ROLE testuser WITH LOGIN PASSWORD 'testpassword';
+```
+
+Попробуем подключиться удаленно:
+```bash
+psql -h pg167 -p 9555 -U testuser -d postgres
+```
+```output
+[s372819@helios ~]$ psql -h pg167 -p 9555 -U testuser -d postgres
+Пароль пользователя testuser: 
+psql (16.4)
+Введите "help", чтобы получить справку.
+
+postgres=> 
+```
+
+**Проверка параметров**:
+```sql
+SHOW max_connections;
+SHOW shared_buffers;
+SHOW temp_buffers;
+SHOW work_mem;
+SHOW checkpoint_timeout;
+SHOW effective_cache_size;
+SHOW fsync;
+SHOW commit_delay;
+```
+```output
+postgres=# SHOW max_connections;
+SHOW shared_buffers;
+SHOW temp_buffers;
+SHOW work_mem;
+SHOW checkpoint_timeout;
+SHOW effective_cache_size;
+SHOW fsync;
+SHOW commit_delay;
+ max_connections 
+-----------------
+ 100
+(1 строка)
+
+ shared_buffers
+----------------
+ 1GB
+(1 строка)
+
+ temp_buffers
+--------------
+ 16MB
+(1 строка)
+
+ work_mem
+----------
+ 4MB
+(1 строка)
+
+ checkpoint_timeout
+--------------------
+ 15min
+(1 строка)
+
+ effective_cache_size
+----------------------
+ 3GB
+(1 строка)
+
+ fsync
+-------
+ on
+(1 строка)
+
+ commit_delay
+--------------
+ 0
+(1 строка)
+
+postgres=# 
+```
+
+# Этап 3. Дополнительные табличные пространства и наполнение базы
+
+## Создание табличных пространств
+
+```sql
+CREATE TABLESPACE mqb89 LOCATION '/var/db/postgres1/mqb89';
+CREATE TABLESPACE utr38 LOCATION '/var/db/postgres1/utr38';
+```
