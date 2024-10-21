@@ -1,3 +1,19 @@
+# Подключение
+```bash
+ssh s372819@se.ifmo.ru -p 2222
+ssh postgres1@pg167
+```
+Подключение к БД из Гелиос TCP/IP с паролем (пользователь уже должен быть создан):
+```bash
+psql -p 9555 -h pg167 -d postgres -U testuser # Пароль: testpassword
+```
+
+# Запуск полного скрипта
+```bash
+./scripts/restart.sh # Удаляет созданные файлы
+./scripts/SUBD_LAB2.sh # Запускает полный скрипт
+```
+
 Определим переменные окружения:
 ```bash
 PGUSERNAME=postgres1
@@ -7,13 +23,19 @@ PGLOCALE=ru_RU.ISO8859-5
 export PGUSERNAME PGDATA PGENCODE PGLOCALE
 ```
 
+Создадим директорию для WAL файлов:
+```bash
+mkdir -p $HOME/oka84
+chown $PGUSERNAME $HOME/oka84
+```
+
 # Этап 1. Инициализация кластера БД
 
 Создаем директорию кластера и инициализируем базу данных:
 ```bash
 mkdir -p $PGDATA
 chown $PGUSERNAME $PGDATA
-initdb -D $PGDATA --encoding=$PGENCODE --locale=$PGLOCALE --username=$PGUSERNAME
+initdb -D $PGDATA --encoding=$PGENCODE --locale=$PGLOCALE --username=$PGUSERNAME --waldir=$HOME/oka84/pg_wal
 ```
 
 ![Step 1 result](image.png)
@@ -114,17 +136,11 @@ commit_delay = 0
 
 **Директория WAL файлов**:
 
-Создадим директорию для WAL файлов:
-```bash
-mkdir -p $HOME/oka84
-chown $PGUSERNAME $HOME/oka84
-```
+Это сделано при самом initdb.
 
  - `archive_mode` - включает архивирование WAL файлов.
- - `archive_command` - команда, которая будет выполняться для архивирования WAL файлов. В данном случае, копируем файл в директорию $HOME/oka84.
 ```conf
 archive_mode = on
-archive_command = 'cp %p $HOME/oka84/%f'
 ```
 
 **Формат лог-файлов**:
@@ -138,7 +154,7 @@ archive_command = 'cp %p $HOME/oka84/%f'
 log_destination = 'csvlog'
 logging_collector = on
 log_directory = 'log'
-log_filename = 'postgresql-%Y-%m-%d_%H%M%S.csv'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log' # .log будет заменено на .csv автоматически
 ```
 
 **Уровень сообщений лога**:
@@ -321,19 +337,22 @@ CREATE DATABASE uglyredbird TEMPLATE template0;
 
 **Проверка**:
 ```sql
-\l
+SELECT datname AS "Имя",
+       pg_roles.rolname AS "Владелец",
+       pg_encoding_to_char(encoding) AS "Кодировка",
+       datcollate AS "LC_COLLATE",
+       datctype AS "LC_CTYPE"
+FROM pg_database
+JOIN pg_roles ON pg_database.datdba = pg_roles.oid
+ORDER BY datname;
 ```
 ```output
-postgres=# \l
-                                                                Список баз данных
-     Имя     | Владелец  | Кодировка  | Провайдер локали |   LC_COLLATE    |    LC_CTYPE     | локаль ICU | Правила ICU |      Права доступа      
--------------+-----------+------------+------------------+-----------------+-----------------+------------+-------------+-------------------------
- postgres    | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | 
- template0   | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | =c/postgres1           +
-             |           |            |                  |                 |                 |            |             | postgres1=CTc/postgres1
- template1   | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             | =c/postgres1           +
-             |           |            |                  |                 |                 |            |             | postgres1=CTc/postgres1
- uglyredbird | postgres1 | ISO_8859_5 | libc             | ru_RU.ISO8859-5 | ru_RU.ISO8859-5 |            |             |
+     Имя     | Владелец  | Кодировка  |   LC_COLLATE    |    LC_CTYPE
+-------------+-----------+------------+-----------------+-----------------
+ postgres    | postgres1 | ISO_8859_5 | ru_RU.ISO8859-5 | ru_RU.ISO8859-5
+ template0   | postgres1 | ISO_8859_5 | ru_RU.ISO8859-5 | ru_RU.ISO8859-5
+ template1   | postgres1 | ISO_8859_5 | ru_RU.ISO8859-5 | ru_RU.ISO8859-5
+ uglyredbird | postgres1 | ISO_8859_5 | ru_RU.ISO8859-5 | ru_RU.ISO8859-5
 (4 строки)
 ```
 
@@ -345,6 +364,12 @@ CREATE ROLE newuser WITH LOGIN;  --Пароль не нужен так как и
 GRANT CONNECT, CREATE ON DATABASE uglyredbird TO newuser;
 GRANT CREATE ON TABLESPACE mqb89 TO newuser;
 GRANT CREATE ON TABLESPACE utr38 TO newuser;
+
+-- Устанавливаем табличные пространства для временных объектов
+ALTER SYSTEM SET temp_tablespaces = 'mqb89', 'utr38';
+
+-- Перезагружаем конфигурацию
+SELECT pg_reload_conf();
 ```
 
 ## От имени новой роли (не администратора) произвести наполнение ВСЕХ созданных баз тестовыми наборами данных. ВСЕ табличные пространства должны использоваться по назначению.
@@ -358,31 +383,16 @@ psql -p 9555 -d uglyredbird -U newuser -f $HOME/newuser.sql
 SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
 ```
 ```output
-uglyredbird=> SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
- schemaname |       tablename        | tableowner | tablespace | hasindexes | hasrules | hastriggers | rowsecurity 
+ schemaname |       tablename        | tableowner | tablespace | hasindexes | hasrules | hastriggers | rowsecurity
 ------------+------------------------+------------+------------+------------+----------+-------------+-------------
  main       | students               | newuser    |            | t          | f        | f           | f
  main       | courses                | newuser    |            | t          | f        | f           | f
- pg_temp_3  | temp_enrollments       | newuser    | mqb89      | t          | f        | f           | f
- pg_temp_3  | temp_course_statistics | newuser    | utr38      | f          | f        | f           | f
+ pg_temp_3  | temp_enrollments       | newuser    | utr38      | t          | f        | f           | f
+ pg_temp_3  | temp_course_statistics | newuser    | mqb89      | f          | f        | f           | f
 (4 строки)
 ```
 
 ## Вывести список всех табличных пространств кластера и содержащиеся в них объекты
-Выведем все табличные пространства
-```sql
-SELECT * FROM pg_tablespace;
-```
-```output
-uglyredbird=> SELECT * FROM pg_tablespace;
-  oid  |  spcname   | spcowner |                   spcacl                    | spcoptions 
--------+------------+----------+---------------------------------------------+------------
-  1663 | pg_default |       10 |                                             |
-  1664 | pg_global  |       10 |                                             |
- 16389 | mqb89      |       10 | {postgres1=C/postgres1,newuser=C/postgres1} |
- 16390 | utr38      |       10 | {postgres1=C/postgres1,newuser=C/postgres1} |
-(4 строки)
-```
 
 Выведем все объекты в табличных пространствах
 ```sql
@@ -396,6 +406,9 @@ FROM
 ```output
  tablespace |                 relname
 ------------+-----------------------------------------
+ utr38      | temp_enrollments
+ mqb89      | temp_enrollments_pkey
+ mqb89      | temp_course_statistics
  pg_global  | pg_toast_1262
  pg_global  | pg_toast_1262_index
  pg_global  | pg_toast_2964
@@ -436,8 +449,6 @@ FROM
  pg_global  | pg_subscription_oid_index
  pg_global  | pg_subscription_subname_index
  pg_global  | pg_authid
- mqb89      | temp_enrollments
- utr38      | temp_course_statistics
  pg_global  | pg_subscription
  pg_global  | pg_database
  pg_global  | pg_db_role_setting
@@ -448,7 +459,7 @@ FROM
  pg_global  | pg_replication_origin
  pg_global  | pg_shseclabel
  pg_global  | pg_parameter_acl
-(52 строки)
+(53 строки)
 ```
 
 
@@ -462,7 +473,7 @@ WHERE
     relowner = (SELECT oid FROM pg_roles WHERE rolname = 'newuser');
 ```
 ```output
-           relname            | tablespace 
+           relname            | tablespace
 ------------------------------+------------
  students_student_id_seq      |
  students                     |
@@ -471,8 +482,454 @@ WHERE
  courses                      |
  courses_pkey                 |
  temp_enrollments_temp_id_seq |
- temp_enrollments             | mqb89
- temp_enrollments_pkey        |
- temp_course_statistics       | utr38
+ temp_enrollments             | utr38
+ temp_enrollments_pkey        | mqb89
+ temp_course_statistics       | mqb89
 (10 строк)
 ```
+
+Выводит список всех табличных пространств в кластере PostgreSQL, содержащиеся в них объекты и базы данных, которые используют эти табличные пространства. 
+```sql
+WITH db_tablespaces AS (
+    SELECT t.spcname, d.datname
+    FROM pg_tablespace t
+    JOIN pg_database d ON d.dattablespace = t.oid
+)
+SELECT t.spcname, 
+       COALESCE(string_agg(DISTINCT c.relname, E'\n'), 'No objects') AS objects,
+       string_agg(DISTINCT db.datname, ', ') AS databases_in
+FROM pg_tablespace t
+LEFT JOIN pg_class c ON c.reltablespace = t.oid OR (c.reltablespace = 0 AND t.spcname = 'pg_default')
+LEFT JOIN db_tablespaces db ON t.spcname = db.spcname
+GROUP BY t.spcname
+ORDER BY t.spcname;
+```
+
+```output
+  spcname   |                    objects                     |                databases_in
+------------+------------------------------------------------+---------------------------------------------
+ mqb89      | temp_course_statistics                        +|
+            | temp_enrollments_pkey                          |
+ pg_default | _pg_foreign_data_wrappers                     +| postgres, template0, template1, uglyredbird
+            | _pg_foreign_servers                           +|
+            | _pg_foreign_table_columns                     +|
+            | _pg_foreign_tables                            +|
+            | _pg_user_mappings                             +|
+            | administrable_role_authorizations             +|
+            | applicable_roles                              +|
+            | attributes                                    +|
+            | character_sets                                +|
+            | check_constraint_routine_usage                +|
+            | check_constraints                             +|
+            | collation_character_set_applicability         +|
+            | collations                                    +|
+            | column_column_usage                           +|
+            | column_domain_usage                           +|
+            | column_options                                +|
+            | column_privileges                             +|
+            | column_udt_usage                              +|
+            | columns                                       +|
+            | constraint_column_usage                       +|
+            | constraint_table_usage                        +|
+            | courses                                       +|
+            | courses_course_id_seq                         +|
+            | courses_pkey                                  +|
+            | data_type_privileges                          +|
+            | domain_constraints                            +|
+            | domain_udt_usage                              +|
+            | domains                                       +|
+            | element_types                                 +|
+            | enabled_roles                                 +|
+            | foreign_data_wrapper_options                  +|
+            | foreign_data_wrappers                         +|
+            | foreign_server_options                        +|
+            | foreign_servers                               +|
+            | foreign_table_options                         +|
+            | foreign_tables                                +|
+            | information_schema_catalog_name               +|
+            | key_column_usage                              +|
+            | parameters                                    +|
+            | pg_aggregate                                  +|
+            | pg_aggregate_fnoid_index                      +|
+            | pg_am                                         +|
+            | pg_am_name_index                              +|
+            | pg_am_oid_index                               +|
+            | pg_amop                                       +|
+            | pg_amop_fam_strat_index                       +|
+            | pg_amop_oid_index                             +|
+            | pg_amop_opr_fam_index                         +|
+            | pg_amproc                                     +|
+            | pg_amproc_fam_proc_index                      +|
+            | pg_amproc_oid_index                           +|
+            | pg_attrdef                                    +|
+            | pg_attrdef_adrelid_adnum_index                +|
+            | pg_attrdef_oid_index                          +|
+            | pg_attribute                                  +|
+            | pg_attribute_relid_attnam_index               +|
+            | pg_attribute_relid_attnum_index               +|
+            | pg_available_extension_versions               +|
+            | pg_available_extensions                       +|
+            | pg_backend_memory_contexts                    +|
+            | pg_cast                                       +|
+            | pg_cast_oid_index                             +|
+            | pg_cast_source_target_index                   +|
+            | pg_class                                      +|
+            | pg_class_oid_index                            +|
+            | pg_class_relname_nsp_index                    +|
+            | pg_class_tblspc_relfilenode_index             +|
+            | pg_collation                                  +|
+            | pg_collation_name_enc_nsp_index               +|
+            | pg_collation_oid_index                        +|
+            | pg_config                                     +|
+            | pg_constraint                                 +|
+            | pg_constraint_conname_nsp_index               +|
+            | pg_constraint_conparentid_index               +|
+            | pg_constraint_conrelid_contypid_conname_index +|
+            | pg_constraint_contypid_index                  +|
+            | pg_constraint_oid_index                       +|
+            | pg_conversion                                 +|
+            | pg_conversion_default_index                   +|
+            | pg_conversion_name_nsp_index                  +|
+            | pg_conversion_oid_index                       +|
+            | pg_cursors                                    +|
+            | pg_default_acl                                +|
+            | pg_default_acl_oid_index                      +|
+            | pg_default_acl_role_nsp_obj_index             +|
+            | pg_depend                                     +|
+            | pg_depend_depender_index                      +|
+            | pg_depend_reference_index                     +|
+            | pg_description                                +|
+            | pg_description_o_c_o_index                    +|
+            | pg_enum                                       +|
+            | pg_enum_oid_index                             +|
+            | pg_enum_typid_label_index                     +|
+            | pg_enum_typid_sortorder_index                 +|
+            | pg_event_trigger                              +|
+            | pg_event_trigger_evtname_index                +|
+            | pg_event_trigger_oid_index                    +|
+            | pg_extension                                  +|
+            | pg_extension_name_index                       +|
+            | pg_extension_oid_index                        +|
+            | pg_file_settings                              +|
+            | pg_foreign_data_wrapper                       +|
+            | pg_foreign_data_wrapper_name_index            +|
+            | pg_foreign_data_wrapper_oid_index             +|
+            | pg_foreign_server                             +|
+            | pg_foreign_server_name_index                  +|
+            | pg_foreign_server_oid_index                   +|
+            | pg_foreign_table                              +|
+            | pg_foreign_table_relid_index                  +|
+            | pg_group                                      +|
+            | pg_hba_file_rules                             +|
+            | pg_ident_file_mappings                        +|
+            | pg_index                                      +|
+            | pg_index_indexrelid_index                     +|
+            | pg_index_indrelid_index                       +|
+            | pg_indexes                                    +|
+            | pg_inherits                                   +|
+            | pg_inherits_parent_index                      +|
+            | pg_inherits_relid_seqno_index                 +|
+            | pg_init_privs                                 +|
+            | pg_init_privs_o_c_o_index                     +|
+            | pg_language                                   +|
+            | pg_language_name_index                        +|
+            | pg_language_oid_index                         +|
+            | pg_largeobject                                +|
+            | pg_largeobject_loid_pn_index                  +|
+            | pg_largeobject_metadata                       +|
+            | pg_largeobject_metadata_oid_index             +|
+            | pg_locks                                      +|
+            | pg_matviews                                   +|
+            | pg_namespace                                  +|
+            | pg_namespace_nspname_index                    +|
+            | pg_namespace_oid_index                        +|
+            | pg_opclass                                    +|
+            | pg_opclass_am_name_nsp_index                  +|
+            | pg_opclass_oid_index                          +|
+            | pg_operator                                   +|
+            | pg_operator_oid_index                         +|
+            | pg_operator_oprname_l_r_n_index               +|
+            | pg_opfamily                                   +|
+            | pg_opfamily_am_name_nsp_index                 +|
+            | pg_opfamily_oid_index                         +|
+            | pg_partitioned_table                          +|
+            | pg_partitioned_table_partrelid_index          +|
+            | pg_policies                                   +|
+            | pg_policy                                     +|
+            | pg_policy_oid_index                           +|
+            | pg_policy_polrelid_polname_index              +|
+            | pg_prepared_statements                        +|
+            | pg_prepared_xacts                             +|
+            | pg_proc                                       +|
+            | pg_proc_oid_index                             +|
+            | pg_proc_proname_args_nsp_index                +|
+            | pg_publication                                +|
+            | pg_publication_namespace                      +|
+            | pg_publication_namespace_oid_index            +|
+            | pg_publication_namespace_pnnspid_pnpubid_index+|
+            | pg_publication_oid_index                      +|
+            | pg_publication_pubname_index                  +|
+            | pg_publication_rel                            +|
+            | pg_publication_rel_oid_index                  +|
+            | pg_publication_rel_prpubid_index              +|
+            | pg_publication_rel_prrelid_prpubid_index      +|
+            | pg_publication_tables                         +|
+            | pg_range                                      +|
+            | pg_range_rngmultitypid_index                  +|
+            | pg_range_rngtypid_index                       +|
+            | pg_replication_origin_status                  +|
+            | pg_replication_slots                          +|
+            | pg_rewrite                                    +|
+            | pg_rewrite_oid_index                          +|
+            | pg_rewrite_rel_rulename_index                 +|
+            | pg_roles                                      +|
+            | pg_rules                                      +|
+            | pg_seclabel                                   +|
+            | pg_seclabel_object_index                      +|
+            | pg_seclabels                                  +|
+            | pg_sequence                                   +|
+            | pg_sequence_seqrelid_index                    +|
+            | pg_sequences                                  +|
+            | pg_settings                                   +|
+            | pg_shadow                                     +|
+            | pg_shmem_allocations                          +|
+            | pg_stat_activity                              +|
+            | pg_stat_all_indexes                           +|
+            | pg_stat_all_tables                            +|
+            | pg_stat_archiver                              +|
+            | pg_stat_bgwriter                              +|
+            | pg_stat_database                              +|
+            | pg_stat_database_conflicts                    +|
+            | pg_stat_gssapi                                +|
+            | pg_stat_io                                    +|
+            | pg_stat_progress_analyze                      +|
+            | pg_stat_progress_basebackup                   +|
+            | pg_stat_progress_cluster                      +|
+            | pg_stat_progress_copy                         +|
+            | pg_stat_progress_create_index                 +|
+            | pg_stat_progress_vacuum                       +|
+            | pg_stat_recovery_prefetch                     +|
+            | pg_stat_replication                           +|
+            | pg_stat_replication_slots                     +|
+            | pg_stat_slru                                  +|
+            | pg_stat_ssl                                   +|
+            | pg_stat_subscription                          +|
+            | pg_stat_subscription_stats                    +|
+            | pg_stat_sys_indexes                           +|
+            | pg_stat_sys_tables                            +|
+            | pg_stat_user_functions                        +|
+            | pg_stat_user_indexes                          +|
+            | pg_stat_user_tables                           +|
+            | pg_stat_wal                                   +|
+            | pg_stat_wal_receiver                          +|
+            | pg_stat_xact_all_tables                       +|
+            | pg_stat_xact_sys_tables                       +|
+            | pg_stat_xact_user_functions                   +|
+            | pg_stat_xact_user_tables                      +|
+            | pg_statio_all_indexes                         +|
+            | pg_statio_all_sequences                       +|
+            | pg_statio_all_tables                          +|
+            | pg_statio_sys_indexes                         +|
+            | pg_statio_sys_sequences                       +|
+            | pg_statio_sys_tables                          +|
+            | pg_statio_user_indexes                        +|
+            | pg_statio_user_sequences                      +|
+            | pg_statio_user_tables                         +|
+            | pg_statistic                                  +|
+            | pg_statistic_ext                              +|
+            | pg_statistic_ext_data                         +|
+            | pg_statistic_ext_data_stxoid_inh_index        +|
+            | pg_statistic_ext_name_index                   +|
+            | pg_statistic_ext_oid_index                    +|
+            | pg_statistic_ext_relid_index                  +|
+            | pg_statistic_relid_att_inh_index              +|
+            | pg_stats                                      +|
+            | pg_stats_ext                                  +|
+            | pg_stats_ext_exprs                            +|
+            | pg_subscription_rel                           +|
+            | pg_subscription_rel_srrelid_srsubid_index     +|
+            | pg_tables                                     +|
+            | pg_timezone_abbrevs                           +|
+            | pg_timezone_names                             +|
+            | pg_toast_1247                                 +|
+            | pg_toast_1247_index                           +|
+            | pg_toast_1255                                 +|
+            | pg_toast_1255_index                           +|
+            | pg_toast_13800                                +|
+            | pg_toast_13800_index                          +|
+            | pg_toast_13805                                +|
+            | pg_toast_13805_index                          +|
+            | pg_toast_13810                                +|
+            | pg_toast_13810_index                          +|
+            | pg_toast_13815                                +|
+            | pg_toast_13815_index                          +|
+            | pg_toast_1417                                 +|
+            | pg_toast_1417_index                           +|
+            | pg_toast_1418                                 +|
+            | pg_toast_1418_index                           +|
+            | pg_toast_2328                                 +|
+            | pg_toast_2328_index                           +|
+            | pg_toast_2600                                 +|
+            | pg_toast_2600_index                           +|
+            | pg_toast_2604                                 +|
+            | pg_toast_2604_index                           +|
+            | pg_toast_2606                                 +|
+            | pg_toast_2606_index                           +|
+            | pg_toast_2609                                 +|
+            | pg_toast_2609_index                           +|
+            | pg_toast_2612                                 +|
+            | pg_toast_2612_index                           +|
+            | pg_toast_2615                                 +|
+            | pg_toast_2615_index                           +|
+            | pg_toast_2618                                 +|
+            | pg_toast_2618_index                           +|
+            | pg_toast_2619                                 +|
+            | pg_toast_2619_index                           +|
+            | pg_toast_2620                                 +|
+            | pg_toast_2620_index                           +|
+            | pg_toast_3079                                 +|
+            | pg_toast_3079_index                           +|
+            | pg_toast_3118                                 +|
+            | pg_toast_3118_index                           +|
+            | pg_toast_3256                                 +|
+            | pg_toast_3256_index                           +|
+            | pg_toast_3350                                 +|
+            | pg_toast_3350_index                           +|
+            | pg_toast_3381                                 +|
+            | pg_toast_3381_index                           +|
+            | pg_toast_3394                                 +|
+            | pg_toast_3394_index                           +|
+            | pg_toast_3429                                 +|
+            | pg_toast_3429_index                           +|
+            | pg_toast_3456                                 +|
+            | pg_toast_3456_index                           +|
+            | pg_toast_3466                                 +|
+            | pg_toast_3466_index                           +|
+            | pg_toast_3596                                 +|
+            | pg_toast_3596_index                           +|
+            | pg_toast_3600                                 +|
+            | pg_toast_3600_index                           +|
+            | pg_toast_6106                                 +|
+            | pg_toast_6106_index                           +|
+            | pg_toast_826                                  +|
+            | pg_toast_826_index                            +|
+            | pg_transform                                  +|
+            | pg_transform_oid_index                        +|
+            | pg_transform_type_lang_index                  +|
+            | pg_trigger                                    +|
+            | pg_trigger_oid_index                          +|
+            | pg_trigger_tgconstraint_index                 +|
+            | pg_trigger_tgrelid_tgname_index               +|
+            | pg_ts_config                                  +|
+            | pg_ts_config_cfgname_index                    +|
+            | pg_ts_config_map                              +|
+            | pg_ts_config_map_index                        +|
+            | pg_ts_config_oid_index                        +|
+            | pg_ts_dict                                    +|
+            | pg_ts_dict_dictname_index                     +|
+            | pg_ts_dict_oid_index                          +|
+            | pg_ts_parser                                  +|
+            | pg_ts_parser_oid_index                        +|
+            | pg_ts_parser_prsname_index                    +|
+            | pg_ts_template                                +|
+            | pg_ts_template_oid_index                      +|
+            | pg_ts_template_tmplname_index                 +|
+            | pg_type                                       +|
+            | pg_type_oid_index                             +|
+            | pg_type_typname_nsp_index                     +|
+            | pg_user                                       +|
+            | pg_user_mapping                               +|
+            | pg_user_mapping_oid_index                     +|
+            | pg_user_mapping_user_server_index             +|
+            | pg_user_mappings                              +|
+            | pg_views                                      +|
+            | referential_constraints                       +|
+            | role_column_grants                            +|
+            | role_routine_grants                           +|
+            | role_table_grants                             +|
+            | role_udt_grants                               +|
+            | role_usage_grants                             +|
+            | routine_column_usage                          +|
+            | routine_privileges                            +|
+            | routine_routine_usage                         +|
+            | routine_sequence_usage                        +|
+            | routine_table_usage                           +|
+            | routines                                      +|
+            | schemata                                      +|
+            | sequences                                     +|
+            | sql_features                                  +|
+            | sql_implementation_info                       +|
+            | sql_parts                                     +|
+            | sql_sizing                                    +|
+            | students                                      +|
+            | students_pkey                                 +|
+            | students_student_id_seq                       +|
+            | table_constraints                             +|
+            | table_privileges                              +|
+            | tables                                        +|
+            | temp_enrollments_temp_id_seq                  +|
+            | transforms                                    +|
+            | triggered_update_columns                      +|
+            | triggers                                      +|
+            | udt_privileges                                +|
+            | usage_privileges                              +|
+            | user_defined_types                            +|
+            | user_mapping_options                          +|
+            | user_mappings                                 +|
+            | view_column_usage                             +|
+            | view_routine_usage                            +|
+            | view_table_usage                              +|
+            | views                                          |
+ pg_global  | pg_auth_members                               +|
+            | pg_auth_members_grantor_index                 +|
+            | pg_auth_members_member_role_index             +|
+            | pg_auth_members_oid_index                     +|
+            | pg_auth_members_role_member_index             +|
+            | pg_authid                                     +|
+            | pg_authid_oid_index                           +|
+            | pg_authid_rolname_index                       +|
+            | pg_database                                   +|
+            | pg_database_datname_index                     +|
+            | pg_database_oid_index                         +|
+            | pg_db_role_setting                            +|
+            | pg_db_role_setting_databaseid_rol_index       +|
+            | pg_parameter_acl                              +|
+            | pg_parameter_acl_oid_index                    +|
+            | pg_parameter_acl_parname_index                +|
+            | pg_replication_origin                         +|
+            | pg_replication_origin_roiident_index          +|
+            | pg_replication_origin_roname_index            +|
+            | pg_shdepend                                   +|
+            | pg_shdepend_depender_index                    +|
+            | pg_shdepend_reference_index                   +|
+            | pg_shdescription                              +|
+            | pg_shdescription_o_c_index                    +|
+            | pg_shseclabel                                 +|
+            | pg_shseclabel_object_index                    +|
+            | pg_subscription                               +|
+            | pg_subscription_oid_index                     +|
+            | pg_subscription_subname_index                 +|
+            | pg_tablespace                                 +|
+            | pg_tablespace_oid_index                       +|
+            | pg_tablespace_spcname_index                   +|
+            | pg_toast_1213                                 +|
+            | pg_toast_1213_index                           +|
+            | pg_toast_1260                                 +|
+            | pg_toast_1260_index                           +|
+            | pg_toast_1262                                 +|
+            | pg_toast_1262_index                           +|
+            | pg_toast_2396                                 +|
+            | pg_toast_2396_index                           +|
+            | pg_toast_2964                                 +|
+            | pg_toast_2964_index                           +|
+            | pg_toast_3592                                 +|
+            | pg_toast_3592_index                           +|
+            | pg_toast_6000                                 +|
+            | pg_toast_6000_index                           +|
+            | pg_toast_6100                                 +|
+            | pg_toast_6100_index                           +|
+            | pg_toast_6243                                 +|
+            | pg_toast_6243_index                            |
+ utr38      | temp_enrollments                               |
+(4 строки)
+ ```

@@ -1,34 +1,38 @@
+\pset pager off
+-- Проверка на temp_tablespaces:
+SHOW temp_tablespaces;
+
 -- Создание схемы для основных таблиц
 CREATE SCHEMA main AUTHORIZATION newuser;
 
--- Создание таблицы студентов в стандартном табличном пространстве
+-- Основные таблицы в стандартном табличном пространстве
 CREATE TABLE main.students (
     student_id SERIAL PRIMARY KEY,
     first_name VARCHAR(50),
     last_name VARCHAR(50),
     enrollment_date DATE
-) TABLESPACE pg_default;
+);
 
--- Создание таблицы курсов в стандартном табличном пространстве
 CREATE TABLE main.courses (
     course_id SERIAL PRIMARY KEY,
     course_name VARCHAR(100),
     credits INTEGER
-) TABLESPACE pg_default;
+);
 
--- Создание временной таблицы для временных данных в табличном пространстве mqb89 без внешних ключей
+-- Временные таблицы (их местоположение управляется через temp_tablespaces)
+-- В PostgreSQL временные таблицы автоматически хранятся в temp_tablespaces
 CREATE TEMP TABLE temp_enrollments (
     temp_id SERIAL PRIMARY KEY,
     student_id INTEGER,
     course_id INTEGER,
     enrollment_date DATE
-) TABLESPACE mqb89;
+);
 
--- Создание временной таблицы для временных индексов в табличном пространстве utr38 без внешних ключей
 CREATE TEMP TABLE temp_course_statistics (
     course_id INTEGER,
     average_grade DECIMAL(5,2)
-) TABLESPACE utr38;
+);
+
 
 INSERT INTO main.students (first_name, last_name, enrollment_date)
 VALUES
@@ -84,8 +88,6 @@ VALUES
 
 SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
 
-SELECT * FROM pg_tablespace;
-
 SELECT
     spcname AS tablespace,
     relname
@@ -99,3 +101,18 @@ FROM
     pg_class LEFT JOIN pg_tablespace ON pg_tablespace.oid = reltablespace
 WHERE
     relowner = (SELECT oid FROM pg_roles WHERE rolname = 'newuser');
+
+
+WITH db_tablespaces AS (
+    SELECT t.spcname, d.datname
+    FROM pg_tablespace t
+    JOIN pg_database d ON d.dattablespace = t.oid
+)
+SELECT t.spcname, 
+       COALESCE(string_agg(DISTINCT c.relname, E'\n'), 'No objects') AS objects,
+       string_agg(DISTINCT db.datname, ', ') AS databases_in
+FROM pg_tablespace t
+LEFT JOIN pg_class c ON c.reltablespace = t.oid OR (c.reltablespace = 0 AND t.spcname = 'pg_default')
+LEFT JOIN db_tablespaces db ON t.spcname = db.spcname
+GROUP BY t.spcname
+ORDER BY t.spcname;

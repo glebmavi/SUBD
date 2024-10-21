@@ -1,0 +1,1 @@
+CREATE ROLE testuser WITH LOGIN PASSWORD 'testpassword';
