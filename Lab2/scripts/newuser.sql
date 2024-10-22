@@ -88,12 +88,12 @@ VALUES
 
 SELECT * FROM pg_catalog.pg_tables WHERE tableowner = 'newuser';
 
-SELECT
-    spcname AS tablespace,
-    relname
-FROM
-    pg_class
-    JOIN pg_tablespace ON pg_tablespace.oid = reltablespace;
+--    SELECT
+--        spcname AS tablespace,
+--        relname
+--    FROM
+--        pg_class
+--        JOIN pg_tablespace ON pg_tablespace.oid = reltablespace;
 
 SELECT
     relname, spcname AS tablespace
@@ -108,11 +108,16 @@ WITH db_tablespaces AS (
     FROM pg_tablespace t
     JOIN pg_database d ON d.dattablespace = t.oid
 )
-SELECT t.spcname, 
-       COALESCE(string_agg(DISTINCT c.relname, E'\n'), 'No objects') AS objects,
-       string_agg(DISTINCT db.datname, ', ') AS databases_in
-FROM pg_tablespace t
-LEFT JOIN pg_class c ON c.reltablespace = t.oid OR (c.reltablespace = 0 AND t.spcname = 'pg_default')
-LEFT JOIN db_tablespaces db ON t.spcname = db.spcname
-GROUP BY t.spcname
-ORDER BY t.spcname;
+SELECT 
+    t.spcname AS Tablespace, 
+    COALESCE(string_agg(DISTINCT c.relname, E'\n'), 'No objects') AS Objects
+FROM 
+    pg_tablespace t
+LEFT JOIN 
+    pg_class c ON c.reltablespace = t.oid OR (c.reltablespace = 0 AND t.spcname = 'pg_default')
+LEFT JOIN 
+    db_tablespaces db ON t.spcname = db.spcname
+GROUP BY 
+    t.spcname
+ORDER BY 
+    t.spcname;
