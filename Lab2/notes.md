@@ -294,3 +294,39 @@ fsync: Это параметр, который определяет, будет 
 WAL (Write-Ahead Logging): Это механизм, при котором все изменения данных сначала записываются в журнал транзакций (WAL), прежде чем они будут применены к основной базе данных. WAL позволяет восстановить данные в случае сбоя, даже если записи в основной базе еще не завершены. Контрольные точки (checkpoints) регулярно сбрасывают содержимое WAL в основной файл данных, уменьшая его размер. Это помогает быстро восстанавливать систему после сбоев, но для полноценной работы WAL необходимо, чтобы эти записи действительно были записаны на диск.
 
 fsync: без этого параметра PostgreSQL не проверяет, были ли данные из журнала WAL на самом деле записаны на диск, прежде чем подтвердить транзакцию. Если fsync отключен, данные могут "зависнуть" в кэшах операционной системы или на уровне аппаратного кэша жесткого диска. Это означает, что в случае аварийного отключения питания или сбоя ОС, данные из WAL могут не быть записаны на диск, что приводит к потере данных, несмотря на механизм WAL.
+
+fsync is a system call that forces the operating system to write all in-memory file data (buffers) to the actual disk. In the context of databases, fsync ensures that data modifications (inserts, updates, etc.) are safely written to the persistent storage (disk) before confirming a transaction as "committed."
+
+Enabled fsync:
+
+    Each time a transaction is committed, the database calls fsync to ensure the data is durable on disk.
+    Ensures data safety but can slow down performance due to the constant disk I/O.
+
+Disabled fsync:
+
+    The system does not forcefully write buffers to disk after each transaction. The operating system handles this in its own time.
+    This speeds up performance, but if the system crashes, there is no guarantee that recent data is preserved on disk.
+
+Write-Ahead Logging (WAL):
+
+    Before committing any transaction to the database, changes are written to a WAL file.
+    WAL ensures that even if the system crashes, the database can replay the logs and recover the committed transactions.
+    These WAL logs are kept until a checkpoint.
+
+Checkpoints:
+
+    A checkpoint is an event where the database synchronizes the data in WAL files with the actual database files on disk.
+    During a checkpoint, all changes up to that point are flushed from memory to disk, ensuring data consistency.
+    Checkpoints occur periodically based on time or data size thresholds (e.g., after 1GB of WAL logs or every 5 minutes).
+
+With fsync turned ON:
+
+    WAL logs are flushed to disk via fsync as they are written. This ensures that logs are safely on disk before the database can say the transaction is committed.
+    When a checkpoint occurs, the database files are also written to disk using fsync. This ensures data durability both in the WAL and in the actual database files.
+    The checkpoint process involves fsync to make sure that the actual data is fully written to disk.
+
+With fsync turned OFF:
+
+    WAL logs might still be written to disk, but the system will not force an immediate write. The operating system decides when to flush the data.
+    During a checkpoint, data might not be safely written to disk if a crash occurs before the system flushes the buffers.
+    This can lead to data loss if there’s a crash because neither the WAL logs nor the checkpointed data are guaranteed to have made it to disk.
