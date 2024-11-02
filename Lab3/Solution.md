@@ -60,7 +60,7 @@ pg_ctl -D ~/khk43 restart
 
 Создаем [скрипт](./main_pg167/backup.sh) для резервного копирования `backup.sh` на основном узле:
 ```bash
-#!/bin/bash
+#!/bin/sh
 
 CURRENT_DATE=$(date "+%Y-%m-%d_%H:%M:%S")
 BACKUP_DIR="~/backups/$CURRENT_DATE"
@@ -160,7 +160,121 @@ bash ~/backup.sh >> ~/backup.log 2>&1
 
 - Итого объем на резервном узле = 56 ГБ (полные копии) + 28 ГБ (WAL) = 84 ГБ.
 
-Тем не менее из-за сжатия данных, объем резервных копий будет меньше. Поэтому можно считать что объем резервных копий не слишком велик учитывая большой объем данных в БД.
+Тем не менее из-за сжатия данных, объем резервных копий будет меньше.
 
 
 ## Этап 2. Потеря основного узла
+
+Для будущей проверки добавим таблицу в базу данных на основном узле:
+```sql
+CREATE TABLE test_table (id SERIAL PRIMARY KEY, data TEXT);
+INSERT INTO test_table (data) VALUES ('Hello, World!');
+```
+```
+postgres=# CREATE TABLE test_table (id SERIAL PRIMARY KEY, data TEXT);
+INSERT INTO test_table (data) VALUES ('Hello, World!');
+CREATE TABLE
+INSERT 0 1
+postgres=# SELECT * FROM test_table;
+ id |     data      
+----+---------------
+  1 | Hello, World!
+(1 строка)
+```
+
+Выполним резервное копирование на основном узле:
+```bash
+bash ~/backup.sh >> ~/backup.log 2>&1
+```
+
+В резервном узле создадим скрипт для восстановления базы данных [`restore.sh`](./reserve_pg175/restore.sh):
+```bash
+#!/bin/sh
+
+mkdir -p ~/khk43 #  новый каталог для PostgreSQL, как в предыдущей лабораторной работе
+cd ~/backups
+BACKUP_DIR=$(ls -td */ | head -n 1) # выбираем последнюю резервную копию
+cd $BACKUP_DIR
+tar -xzf base.tar.gz -C ~/khk43
+tar -xzf pg_wal.tar.gz -C ~/khk43/pg_wal
+
+# создание директорий для tablespaces по аналогии с предыдущей лабораторной работой
+mkdir -p ~/mqb89
+mkdir -p ~/utr38
+
+tar -xzf 16384.tar.gz -C ~/mqb89 # OID табличного пространства mqb89
+tar -xzf 16385.tar.gz -C ~/utr38 # OID табличного пространства utr38
+
+chown -R postgres0 ~/khk43
+chmod 750 ~/khk43 # Маска прав должна быть u=rwx (0700) или u=rwx,g=rx (0750).
+chown -R postgres0 ~/mqb89
+chown -R postgres0 ~/utr38
+
+cd ~
+cp ~/pg_hba.conf ~/khk43
+cp ~/postgresql.conf ~/khk43
+cp ~/pg_ident.conf ~/khk43
+
+# запуск PostgreSQL
+pg_ctl -D ~/khk43 -l файл_журнала start
+```
+
+Загружаем скрипт на резервный узел:
+```bash
+scp -o "ProxyJump s372819@se.ifmo.ru:2222" reserve_pg175/restore.sh postgres0@pg175:~
+```
+
+Для возможности повторения сценария [`cleanup.sh`](./reserve_pg175/cleanup.sh) на резервном узле:
+```bash
+#!/bin/sh
+
+pg_ctl -D ~/khk43 stop
+
+# Копирование .conf файлов
+cp ~/khk43/postgresql.conf ~/khk43/pg_hba.conf ~/khk43/pg_ident.conf ~
+
+rm -rf ~/khk43
+rm -rf ~/mqb89
+rm -rf ~/utr38
+```
+
+Загружаем скрипт на резервный узел:
+```bash
+scp -o "ProxyJump s372819@se.ifmo.ru:2222" reserve_pg175/cleanup.sh postgres0@pg175:~
+```
+```bash
+chmod +x cleanup.sh
+```
+
+
+Добавим в [pg_ident.conf](./reserve_pg175/pg_ident.conf) на резервном узле:
+```conf
+my_map          postgres0               postgres1
+```
+
+Загрузим изменения:
+```bash
+scp -o "ProxyJump s372819@se.ifmo.ru:2222" reserve_pg175/pg_ident.conf postgres0@pg175:~/khk43
+```
+
+Применим изменения:
+```bash
+pg_ctl -D ~/khk43 restart
+```
+
+Для проверки целостности данных на резервном узле выполним:
+```bash
+psql -p 9555 -d postgres -U postgres1
+```
+```sql
+SELECT * FROM test_table;
+```
+
+Результат:
+```
+postgres=# SELECT * FROM test_table;
+ id |     data      
+----+---------------
+  1 | Hello, World!
+(1 строка)
+```
