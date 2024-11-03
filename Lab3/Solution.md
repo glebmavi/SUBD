@@ -300,3 +300,135 @@ postgres=# SELECT * FROM test_table;
   1 | Hello, World!
 (1 строка)
 ```
+
+## Этап 3. Повреждение файлов БД
+### Симулирование сбоя
+
+Для будущей проверки добавим таблицу в табличное пространство на основном узле:
+```sql
+CREATE TABLE test_table_mqb89 (id SERIAL PRIMARY KEY, data TEXT) TABLESPACE mqb89;
+INSERT INTO test_table_mqb89 (data) VALUES ('Data in tablespace mqb89');
+```
+```sql
+SELECT * FROM test_table_mqb89;
+```
+```
+postgres=# SELECT * FROM test_table_mqb89;
+ id |           data
+----+--------------------------
+  1 | Data in tablespace mqb89
+(1 строка)
+```
+
+Пусть у нас выполнилось сохранение данных на основном узле:
+```bash
+bash ~/backup.sh >> ~/backup.log 2>&1
+```
+
+Симулируем сбой на основном узле, удалив директорию с табличным пространством:
+```bash
+rm -rf ~/mqb89
+```
+
+### Проверка работоспособности
+Проверяем работу СУБД, пытаясь получить данные из таблицы ts_table:
+```sql
+psql -p 9555 -d postgres -U postgres1
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+postgres=# SELECT * FROM test_table_mqb89;
+ОШИБКА:  не удалось открыть файл "pg_tblspc/16384/PG_16_202307071/5/16430": No such file or directory
+postgres=# 
+```
+
+Попробуем перезапустить СУБД:
+```bash
+pg_ctl -D ~/khk43 stop
+pg_ctl -D ~/khk43 -l файл_журнала start
+```
+Результат:
+```
+[postgres1@pg167 ~]$ psql -p 9555 -d postgres -U postgres1
+psql (16.4)
+Введите "help", чтобы получить справку.
+
+postgres=# SELECT * FROM test_table_mqb89;
+ОШИБКА:  не удалось открыть файл "pg_tblspc/16384/PG_16_202307071/5/16430": No such file or directory
+postgres=#
+```
+
+Как видим, СУБД смогла перезапуститься, так как PostgreSQL не требует наличия всех табличных пространств для запуска. Главное, чтобы не было ошибок в системных таблицах.
+Тем не менее не смогла получить данные из таблицы, так как файлы табличного пространства были утеряны.
+
+### Восстановление данных
+
+Учитывая что исходное расположение табличного пространства недоступно, разместим его в другой директории и скорректируем конфигурацию.
+
+[`recover_mqb89.sh`](./main_pg167/recover_mqb89.sh):
+```bash
+pg_ctl -D ~/khk43 stop
+
+mkdir -p ~/new_mqb89
+echo "Создана директория ~/new_mqb89"
+
+cd ~/backups
+BACKUP_DIR=$(ls -td */ | head -n 1) # выбираем последнюю резервную копию
+cd $BACKUP_DIR
+echo "Выбрана резервная копия $BACKUP_DIR"
+
+tar -xzf 16384.tar.gz -C ~/new_mqb89
+echo "Распаковано табличное пространство"
+
+chown -R postgres1 ~/new_mqb89
+chmod 750 ~/new_mqb89
+echo "Установлены права доступа"
+
+cd ~/khk43/pg_tblspc
+rm 16384
+ln -s ~/new_mqb89 16384
+echo "Изменены символические ссылки"
+
+cd ~
+pg_ctl -D ~/khk43 -l файл_журнала start
+```
+
+Загружаем скрипт на основной узел:
+```bash
+scp -o "ProxyJump s372819@se.ifmo.ru:2222" main_pg167/recover_mqb89.sh postgres1@pg167:~
+```
+
+Сделаем скрипт исполняемым:
+```bash
+chmod +x recover_mqb89.sh
+```
+
+Выполним скрипт на основном узле:
+```bash
+bash ~/recover_mqb89.sh
+```
+
+Проверим работоспособность СУБД:
+```bash
+psql -p 9555 -d postgres -U postgres1
+```
+```sql
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+[postgres1@pg167 ~]$ psql -p 9555 -d postgres -U postgres1
+psql (16.4)
+Введите "help", чтобы получить справку.
+
+postgres=# SELECT * FROM test_table_mqb89;
+ id |           data
+----+--------------------------
+  1 | Data in tablespace mqb89
+(1 строка)
+
+postgres=#
+```
+
+Как видим, данные восстановлены успешно.
