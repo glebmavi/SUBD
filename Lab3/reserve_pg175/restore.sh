@@ -34,3 +34,17 @@ echo "Скопированы .conf файлы"
 
 # запуск PostgreSQL
 pg_ctl -D ~/khk43 -l файл_журнала start
+
+# Остановка PostgreSQL
+pg_ctl -D ~/khk43 stop
+
+# Изменяем символические ссылки на табличные пространства
+cd ~/khk43/pg_tblspc
+rm 16384
+rm 16385
+ln -s ~/mqb89 16384
+ln -s ~/utr38 16385
+
+cd ~
+# Запуск PostgreSQL
+pg_ctl -D ~/khk43 -l файл_журнала start
