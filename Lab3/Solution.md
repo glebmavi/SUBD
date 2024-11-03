@@ -432,3 +432,192 @@ postgres=#
 ```
 
 Как видим, данные восстановлены успешно.
+
+## Этап 4. Логическое повреждение данных
+
+### Добавление новых строк в таблицы
+
+В основном узле добавим новые строки в таблицы:
+```sql
+INSERT INTO test_table (data) VALUES ('New data 1');
+INSERT INTO test_table (data) VALUES ('New data 2');
+INSERT INTO test_table_mqb89 (data) VALUES ('New data 1');
+INSERT INTO test_table_mqb89 (data) VALUES ('New data 2');
+```
+Посмотрим таблицы:
+```sql
+SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+postgres=# SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+ id |     data      
+----+---------------
+  1 | Hello, World!
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+
+ id |           data
+----+--------------------------
+  1 | Data in tablespace mqb89
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+```
+
+Так как требуется генерация файла на резервном узле с помощью pg_dump, то там должна быть актуальная копия данных. Поэтому выполним вышеописанный скрипт для резервного копирования на резервном узле:
+```bash
+bash ~/backup.sh >> ~/backup.log 2>&1
+```
+
+### Симулирование ошибки
+Зафиксируем время и симулируем ошибку, удалив таблицы в основном узле:
+```bash
+psql -p 9555 -d postgres -U postgres1
+```
+Получим время:
+```sql
+SELECT now();
+```
+Результат:
+```
+postgres=# SELECT now();
+              now
+-------------------------------
+ 2024-11-03 16:41:29.585481+03
+(1 строка)
+```
+
+```sql
+DROP TABLE test_table;
+DROP TABLE test_table_mqb89;
+```
+
+Демонстрация ошибки:
+```sql
+SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+postgres=# SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+ОШИБКА:  отношение "test_table" не существует
+СТРОКА 1: SELECT * FROM test_table;
+                        ^
+ОШИБКА:  отношение "test_table_mqb89" не существует
+СТРОКА 1: SELECT * FROM test_table_mqb89;
+                        ^
+```
+
+### Восстановление данных
+
+В резервном узле будет запущен скрипт [`restore.sh`](./reserve_pg175/restore.sh) для восстановления данных. (Вместе с [cleanup.sh](./reserve_pg175/cleanup.sh)).
+Подразумевается, что ранее резервное копирование было выполнено успешно.
+
+```bash
+./cleanup.sh
+./restore.sh
+```
+
+Таким образом, на резервном узле будут актуальные данные:
+```bash
+psql -p 9555 -d postgres -U postgres1
+```
+```sql
+SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+postgres=# SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+ id |     data      
+----+---------------
+  1 | Hello, World!
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+
+ id |           data
+----+--------------------------
+  1 | Data in tablespace mqb89
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+```
+
+На резервном узле сгенерируем файл с помощью pg_dump:
+```bash
+pg_dump -p 9555 -U postgres1 -d postgres > ~/pg_dump.sql
+```
+
+На резервном узле сгенерируем SSH-ключ для автоматической авторизации scp:
+```bash
+ssh-keygen -t rsa -b 4096 -C "postgres0@pg175" # на все вопросы отвечаем Enter
+ssh-copy-id -i ~/.ssh/id_rsa.pub postgres1@pg167
+```
+
+Загрузим файл дампа на основной узел из резервного:
+```bash
+scp ~/pg_dump.sql postgres1@pg167:~
+```
+
+Для возможности повторения сценария [`generate_and_send_dump.sh`](./reserve_pg175/generate_and_send_dump.sh) на резервном узле:
+```bash
+#!/bin/sh
+
+# Ожидаем что существует актуальная резервная копия в '~/backups'
+cd ~
+./cleanup.sh
+./restore.sh
+
+# Генерация дампа
+pg_dump -p 9555 -U postgres1 -d postgres > ~/pg_dump.sql
+echo "Сгенерирован дамп"
+
+# Отправка дампа на основной узел
+scp ~/pg_dump.sql postgres1@pg167:~
+echo "Дамп отправлен"
+```
+
+В основном узле восстановим данные из дампа:
+```bash
+psql -p 9555 -d postgres -U postgres1 -f ~/pg_dump.sql
+```
+
+Проверим, что данные восстановлены:
+```bash
+psql -p 9555 -d postgres -U postgres1
+```
+```sql
+SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+```
+Результат:
+```
+[postgres1@pg167 ~]$ psql -p 9555 -d postgres -U postgres1
+psql (16.4)
+Введите "help", чтобы получить справку.
+
+postgres=# SELECT * FROM test_table;
+SELECT * FROM test_table_mqb89;
+ id |     data      
+----+---------------
+  1 | Hello, World!
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+
+ id |           data
+----+--------------------------
+  1 | Data in tablespace mqb89
+  2 | New data 1
+  3 | New data 2
+(3 строки)
+
+postgres=#
+```
