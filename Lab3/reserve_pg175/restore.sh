@@ -22,9 +22,15 @@ tar -xzf 16385.tar.gz -C ~/utr38 # OID табличного пространст
 echo "Распакованы табличные пространства"
 
 chown -R postgres0 ~/khk43
-chmod 750 ~/khk43 # Маска прав должна быть u=rwx (0700) или u=rwx,g=rx (0750).
+chmod -R 750 ~/khk43 ~/mqb89 ~/utr38 # Маска прав должна быть u=rwx (0700) или u=rwx,g=rx (0750).
 chown -R postgres0 ~/mqb89
 chown -R postgres0 ~/utr38
+echo "Установлены права доступа"
+
+touch ~/khk43/recovery.signal
+chown postgres0 ~/khk43/recovery.signal
+chmod -R 700 ~/khk43/recovery.signal
+echo "Создан файл recovery.signal"
 
 cd ~
 cp ~/pg_hba.conf ~/khk43

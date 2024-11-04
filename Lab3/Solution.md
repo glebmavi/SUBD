@@ -187,6 +187,11 @@ postgres=# SELECT * FROM test_table;
 bash ~/backup.sh >> ~/backup.log 2>&1
 ```
 
+Установим restore_command в [`postgresql.conf`](./reserve_pg175/postgresql.conf) на резервном узле:
+```conf
+restore_command = 'cp /var/db/postgres0/wal_archive/%f "%p"'
+```
+
 В резервном узле создадим скрипт для восстановления базы данных [`restore.sh`](./reserve_pg175/restore.sh):
 ```bash
 #!/bin/sh
@@ -213,9 +218,15 @@ tar -xzf 16385.tar.gz -C ~/utr38 # OID табличного пространст
 echo "Распакованы табличные пространства"
 
 chown -R postgres0 ~/khk43
-chmod 750 ~/khk43 # Маска прав должна быть u=rwx (0700) или u=rwx,g=rx (0750).
+chmod -R 750 ~/khk43 ~/mqb89 ~/utr38 # Маска прав должна быть u=rwx (0700) или u=rwx,g=rx (0750).
 chown -R postgres0 ~/mqb89
 chown -R postgres0 ~/utr38
+echo "Установлены права доступа"
+
+touch ~/khk43/recovery.signal
+chown postgres0 ~/khk43/recovery.signal
+chmod -R 700 ~/khk43/recovery.signal
+echo "Создан файл recovery.signal"
 
 cd ~
 cp ~/pg_hba.conf ~/khk43
@@ -241,9 +252,10 @@ cd ~
 pg_ctl -D ~/khk43 -l файл_журнала start
 ```
 
-Загружаем скрипт на резервный узел:
+Загружаем скрипт и postgresql.conf на резервный узел:
 ```bash
 scp -o "ProxyJump s372819@se.ifmo.ru:2222" reserve_pg175/restore.sh postgres0@pg175:~
+scp -o "ProxyJump s372819@se.ifmo.ru:2222" reserve_pg175/postgresql.conf postgres0@pg175:~
 ```
 
 Для возможности повторения сценария [`cleanup.sh`](./reserve_pg175/cleanup.sh) на резервном узле:
