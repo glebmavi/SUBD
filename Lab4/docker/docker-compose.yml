@@ -1,0 +1,42 @@
+services:
+  master:
+    container_name: master
+    build:
+      context: ./master
+    restart: unless-stopped
+    ports:
+      - "9001:5432"
+    environment:
+      - PGDATA=/var/lib/postgresql/data
+      - PGENCODING=UTF8
+      - PGLOCALE=en_US.UTF8
+      - PGUSERNAME=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./master/data:/var/lib/postgresql/data
+    networks:
+      - pg_net
+
+  hot_standby:
+    container_name: hot_standby
+    build:
+      context: ./hot_standby
+    restart: unless-stopped
+    ports:
+      - "9002:5432"
+    depends_on:
+      - master
+    environment:
+      - PGDATA=/var/lib/postgresql/data
+      - PGENCODING=UTF8
+      - PGLOCALE=en_US.UTF8
+      - PGUSERNAME=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./hot_standby/data:/var/lib/postgresql/data
+    networks:
+      - pg_net
+
+networks:
+  pg_net:
+    driver: bridge
