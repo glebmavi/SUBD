@@ -6,6 +6,7 @@
 │   │   Dockerfile
 │   │
 │   ├───conf
+|   │       pg_hba.conf
 │   │       replica.conf
 │   │
 │   ├───data
@@ -90,23 +91,37 @@ RUN chmod +x /docker-entrypoint-initdb.d/init-master.sh
 set -e
 
 psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
+
+# Copy conf files
+cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"
+cp /etc/postgresql/pg_hba.conf "$PGDATA/pg_hba.conf"
+
+# Restart
+pg_ctl -D "$PGDATA" -m fast -w restart
 ```
 
 [postgresql.conf](./docker/master/conf/postgresql.conf)
 ```conf
 listen_addresses = '*'
 wal_level = replica
-archive_mode = on
-archive_command = 'cp %p /var/lib/postgresql/data/archive/%f'
-max_wal_senders = 10
 wal_keep_size = 64MB
-include_dir = '/etc/postgresql/conf.d'
+max_wal_senders = 10
+max_replication_slots = 10
+archive_mode = on
+archive_command = 'echo "dummy command, archive_command called"'
+log_destination = 'jsonlog'
+logging_collector = on
+log_connections = on
+log_disconnections = on
+log_duration = on
+log_directory = 'pg_log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
 ```
 
 [pg_hba.conf](./docker/master/conf/pg_hba.conf)
 ```conf
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-
+local   all             all                                     trust
 host    replication     replicator      0.0.0.0/0               md5
 host    all             all             0.0.0.0/0               md5
 ```
@@ -116,7 +131,8 @@ host    all             all             0.0.0.0/0               md5
 ```Dockerfile
 FROM postgres:latest
 
-COPY conf/replica.conf /etc/postgresql/conf.d/replica.conf
+COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
+COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-standby.sh /docker-entrypoint-initdb.d/init-standby.sh
 RUN chmod +x /docker-entrypoint-initdb.d/init-standby.sh
 ```
@@ -132,30 +148,55 @@ until pg_isready -h master -p 5432 -U postgres; do
   sleep 2
 done
 
-export PGPASSWORD='replicator_password'
+# Stop the server
+pg_ctl stop -D "$PGDATA"
 
 # Clean up the data directory
-rm -rf /var/lib/postgresql/data/*
+rm -rf "$PGDATA"/*
+echo "Data directory cleaned up"
 
 # Perform base backup
-pg_basebackup -h master -D /var/lib/postgresql/data -U replicator -v -P --wal-method=stream
+PGPASSWORD='replicator_password' pg_basebackup -h master -D /var/lib/postgresql/data -U replicator -v -P --wal-method=stream
+echo "Base backup completed"
 
 # Create standby.signal file
-touch /var/lib/postgresql/data/standby.signal
+touch "$PGDATA/standby.signal"
 
 # Set permissions
-chown -R postgres:postgres /var/lib/postgresql/data
+chown -R postgres:postgres "$PGDATA"
+
+# Copy conf files
+cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"
+cp /etc/postgresql/pg_hba.conf "$PGDATA/pg_hba.conf"
+echo "Conf files copied"
+
+# Start the server
+pg_ctl -D "$PGDATA" start
 ```
 
-[replica.conf](./docker/hot_standby/conf/replica.conf)
+[postgresql.conf](./docker/hot_standby/conf/postgresql.conf)
 ```conf
 hot_standby = on
 primary_conninfo = 'host=master port=5432 user=replicator password=replicator_password'
 ```
 
+[pg_hba.conf](./docker/hot_standby/conf/pg_hba.conf)
+```conf
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+host    replication     replicator      0.0.0.0/0               md5
+host    all             all             0.0.0.0/0               md5
+```
+
 ### Запуск
+
 ```bash
 docker-compose up -d --build
+```
+
+(Может понадобится при повторном запуске)
+```bash
+Remove-Item -Path .\master\data\*, .\hot_standby\data\* -Recurse -Force
 ```
 
 ### Наполнение базы
@@ -172,8 +213,45 @@ docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VAL
 docker exec -it master psql -U postgres -d test -c "SELECT * FROM users;"
 ```
 
+```
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -c "CREATE DATABASE test;"
+CREATE DATABASE
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255));"
+CREATE TABLE
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Alice');"
+INSERT 0 1
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Bob');"
+INSERT 0 1
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "SELECT * FROM users;"
+ id | name
+----+-------
+  1 | Alice
+  2 | Bob
+(2 rows)
+```
+
 Проверим режим чтения на стендбае:
 ```bash
 docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
 ```
 
+```
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
+ id | name
+----+-------
+  1 | Alice
+  2 | Bob
+(2 rows)
+```
+
+Попробуем записать данные на стендбае:
+```bash
+docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie');"
+```
+
+```
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie');"
+ERROR:  cannot execute INSERT in a read-only transaction
+```
+
+## Этап 2. Симуляция и обработка сбоя
