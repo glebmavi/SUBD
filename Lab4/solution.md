@@ -199,14 +199,28 @@ host    all             all             0.0.0.0/0               md5
 
 ### Запуск
 
-```bash
-docker-compose up -d --build
-```
-
+Очистка данных
 (Может понадобится при повторном запуске)
 ```bash
 Remove-Item -Path .\master\data\*, .\hot_standby\data\* -Recurse -Force
 ```
+
+Запуск master
+```bash
+docker-compose up -d --build master
+```
+
+Запуск init-master.sh
+```bash
+docker exec -it master bash -c "/home/init/init-master.sh"
+docker restart master
+```
+
+Запуск hot_standby
+```bash
+docker-compose up -d --build hot_standby
+```
+Remove-Item -Path .\hot_standby\data\* -Recurse -Force
 
 ### Наполнение базы
 На примере не менее, чем двух таблиц, столбцов, строк, транзакций и клиентских сессий:
@@ -322,6 +336,8 @@ docker exec -it hot_standby bash /home/scripts/read_client.sh
 docker network disconnect docker_pg_net master
 ```
 
+### 2.3 Обработка
+
 В стандбае видим логи:
 ```
 2024-11-26 12:28:45 2024-11-26 09:28:45.898 GMT [190] FATAL:  could not connect to the primary server: could not translate host name "master" to address: Temporary failure in name resolution
@@ -329,6 +345,9 @@ docker network disconnect docker_pg_net master
 ```
 
 При этом чтение работает:
+```bash
+docker exec -it hot_standby bash /home/scripts/read_client.sh
+```
 ```
 PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby bash /home/scripts/read_client.sh
  count 
@@ -350,4 +369,67 @@ PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby bash /ho
 
 Переводим стендбай в режим мастера:
 ```bash
+docker exec -it hot_standby psql -U postgres -c "select pg_promote();"
+```
+
+Проверим чтение и запись на стендбае после promote:
+```bash
+docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie');"
+docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
+```
+
+```
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie');"
+INSERT 0 1
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
+ id |      name       
+----+-----------------
+  1 | Alice
+  2 | Bob
+  3 | User_1732610768
+  4 | User_1732610770
+  5 | User_1732610772
+  6 | User_1732610775
+  7 | User_1732610777
+ 36 | Charlie
+(8 rows)
+```
+
+### 3. Восстановление
+
+Включаем сеть мастера:
+```bash
+docker network connect docker_pg_net master
+```
+
+Восстанавливаем работу мастера:
+```bash
+docker exec -it master bash
+```
+
+```bash
+su postrges
+```
+```bash
+pg_basebackup -P -X stream -c fast -h hot_standby -U replicator -D ~/backup
+rm -rf /var/lib/postgresql/data/*
+mv ~/backup/* /var/lib/postgresql/data/
+```
+
+```bash
+docker exec -it hot_standby bash
+```
+```bash
+touch /var/lib/postgresql/data/standby.signal
+```
+  
+```bash
+docker-compose up master
+```
+
+Проверяем:
+```bash
+docker exec -it master bash /home/scripts/read_client.sh
+docker exec -it master bash /home/scripts/write_client.sh
+docker exec -it hot_standby bash /home/scripts/read_client.sh
 ```
