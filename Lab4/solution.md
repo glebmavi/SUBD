@@ -301,7 +301,7 @@ done
 ```bash
 #!/bin/bash
 while true; do
-    psql -U postgres -d test -c "SELECT COUNT(*) FROM users;"
+    psql -U postgres -d test -c "SELECT * FROM users;"
     psql -U postgres -d test -c "SELECT * FROM orders;"
     sleep 2
 done
@@ -309,7 +309,45 @@ done
 
 Запуск:
 ```bash
-docker exec -it master bash -c "bash /scripts/read_client.sh &"
-docker exec -it master bash -c "bash /scripts/write_client.sh &"
-docker exec -it hot_standby bash -c "bash /scripts/read_client.sh &"
+docker exec -it master bash /home/scripts/read_client.sh
+docker exec -it master bash /home/scripts/write_client.sh
+docker exec -it hot_standby bash /home/scripts/read_client.sh
+```
+
+Ожидаем что в стандбае чтение будет автоматически показывать новые данные из мастера.
+
+### 2.2 Сбой
+Симулируем сбой мастера отключив сетевой интерфейс:
+```bash
+docker network disconnect docker_pg_net master
+```
+
+В стандбае видим логи:
+```
+2024-11-26 12:28:45 2024-11-26 09:28:45.898 GMT [190] FATAL:  could not connect to the primary server: could not translate host name "master" to address: Temporary failure in name resolution
+2024-11-26 12:28:53 2024-11-26 09:28:53.908 GMT [191] FATAL:  could not connect to the primary server: could not translate host name "master" to address: Temporary failure in name resolution
+```
+
+При этом чтение работает:
+```
+PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby bash /home/scripts/read_client.sh
+ count 
+-------
+     7
+(1 row)
+
+ id | user_id |  product   
+----+---------+------------
+  1 |       1 | Laptop
+  2 |       2 | Smartphone
+  3 |       3 | HDMI cable
+  4 |       4 | HDMI cable
+  5 |       5 | TV
+  6 |       6 | TV
+  7 |       7 | TV
+(7 rows)
+```
+
+Переводим стендбай в режим мастера:
+```bash
 ```
