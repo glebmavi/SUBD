@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
 
+# Replicator role
 psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
+
+# DB init and populate
+psql -v ON_ERROR_STOP=1 --username "postgres" -f "/docker-entrypoint-initdb.d/init-db.sql"
 
 # Copy conf files
 cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"

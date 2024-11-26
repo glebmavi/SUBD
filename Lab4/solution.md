@@ -6,13 +6,14 @@
 │   │   Dockerfile
 │   │
 │   ├───conf
-|   │       pg_hba.conf
-│   │       replica.conf
+│   │       pg_hba.conf
+│   │       postgresql.conf
 │   │
 │   ├───data
-│   └───init
-│           init-standby.sh
-│
+│   ├───init
+│   │       init-standby.sh
+│   │
+│   └───scripts
 └───master
     │   Dockerfile
     │
@@ -21,8 +22,10 @@
     │       postgresql.conf
     │
     ├───data
-    └───init
-            init-master.sh
+    ├───init
+    │       init-master.sh
+    │       
+    └───scripts
 ```
 
 Хосты настроены через [docker-compose.yml](./docker/docker-compose.yml)
@@ -82,15 +85,21 @@ FROM postgres:latest
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-master.sh /docker-entrypoint-initdb.d/init-master.sh
+COPY scripts/init-db.sql /docker-entrypoint-initdb.d/init-db.sql
 RUN chmod +x /docker-entrypoint-initdb.d/init-master.sh
 ```
 
 [init-master.sh](./docker/master/init/init-master.sh)
 ```bash
 #!/bin/bash
+#!/bin/bash
 set -e
 
+# Replicator role
 psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
+
+# DB init and populate
+psql -v ON_ERROR_STOP=1 --username "postgres" -f "/docker-entrypoint-initdb.d/init-db.sql"
 
 # Copy conf files
 cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"
@@ -201,11 +210,25 @@ Remove-Item -Path .\master\data\*, .\hot_standby\data\* -Recurse -Force
 
 ### Наполнение базы
 На примере не менее, чем двух таблиц, столбцов, строк, транзакций и клиентских сессий:
-```bash
-docker exec -it master psql -U postgres -c "CREATE DATABASE test;"
-docker exec -it master psql -U postgres -d test -c "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255));"
-docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Alice');"
-docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Bob');"
+[init-db.sql](./docker/master/scripts/init-db.sql)
+```sql
+CREATE DATABASE test;
+
+\c test;
+
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255)
+);
+
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id),
+    product VARCHAR(255)
+);
+
+INSERT INTO users (name) VALUES ('Alice'), ('Bob');
+INSERT INTO orders (user_id, product) VALUES (1, 'Laptop'), (2, 'Smartphone');
 ```
 
 Проверим данные на мастере:
@@ -214,16 +237,8 @@ docker exec -it master psql -U postgres -d test -c "SELECT * FROM users;"
 ```
 
 ```
-PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -c "CREATE DATABASE test;"
-CREATE DATABASE
-PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255));"
-CREATE TABLE
-PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Alice');"
-INSERT 0 1
-PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Bob');"
-INSERT 0 1
 PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it master psql -U postgres -d test -c "SELECT * FROM users;"
- id | name
+ id | name  
 ----+-------
   1 | Alice
   2 | Bob
@@ -237,7 +252,7 @@ docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
 
 ```
 PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
- id | name
+ id | name  
 ----+-------
   1 | Alice
   2 | Bob
