@@ -270,3 +270,46 @@ ERROR:  cannot execute INSERT in a read-only transaction
 ```
 
 ## Этап 2. Симуляция и обработка сбоя
+
+### 2.1 Подготовка
+Написаны скрипты для симуляции чтения и записи из мастера и чтение из стендбая:
+
+[read_client.sh](./docker/master/scripts/read_client.sh)
+```bash
+#!/bin/bash
+while true; do
+    psql -U postgres -d test -c "SELECT COUNT(*) FROM users;"
+    sleep 2
+done
+```
+
+[write_client.sh](./docker/master/scripts/write_client.sh)
+```bash
+#!/bin/bash
+while true; do
+    psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('User_$(date +%s)');"
+    
+    items=("TV" "Mouse" "Keyboard" "HDMI cable")
+    random_item=${items[$RANDOM % ${#items[@]}]}
+    last_user_id=$(psql -U postgres -d test -t -c "SELECT id FROM users ORDER BY id DESC LIMIT 1;")
+    psql -U postgres -d test -c "INSERT INTO orders (user_id, item) VALUES ($last_user_id, '$random_item');"
+    sleep 2
+done
+```
+
+В стандбае [read_client.sh](./docker/hot_standby/scripts/read_client.sh)
+```bash
+#!/bin/bash
+while true; do
+    psql -U postgres -d test -c "SELECT COUNT(*) FROM users;"
+    psql -U postgres -d test -c "SELECT * FROM orders;"
+    sleep 2
+done
+```
+
+Запуск:
+```bash
+docker exec -it master bash -c "bash /scripts/read_client.sh &"
+docker exec -it master bash -c "bash /scripts/write_client.sh &"
+docker exec -it hot_standby bash -c "bash /scripts/read_client.sh &"
+```
