@@ -1,4 +1,4 @@
-Для последовательности действий, необходимых для выполнения, см. [run_sequence.md](./run_sequence.md)
+Только последовательности действий, необходимых для выполнения, см. [run_sequence.md](./run_sequence.md)
 
 ## Структура:
 ```
@@ -16,6 +16,9 @@
 │   │       init-standby.sh
 │   │
 │   └───scripts
+│           auto_promote.sh
+│           read_client.sh
+│
 └───master
     │   Dockerfile
     │
@@ -26,8 +29,11 @@
     ├───data
     ├───init
     │       init-master.sh
-    │       
+    │
     └───scripts
+            init-db.sql
+            read_client.sh
+            write_client.sh
 ```
 
 Хосты настроены через [docker-compose.yml](./docker/docker-compose.yml)
@@ -139,13 +145,16 @@ host    all             all             0.0.0.0/0               md5
 [Dockefile](./docker/hot_standby/Dockerfile)
 ```Dockerfile
 FROM postgres:latest
-RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lists/*
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-standby.sh /docker-entrypoint-initdb.d/init-standby.sh
 COPY scripts/read_client.sh /home/scripts/read_client.sh
+COPY scripts/auto_promote.sh /home/scripts/auto_promote.sh
 RUN chmod +x /home/scripts/read_client.sh
 RUN chmod +x /docker-entrypoint-initdb.d/init-standby.sh
+RUN chmod +x /home/scripts/auto_promote.sh
+
+RUN apt-get update && apt-get install -y iputils-ping
 ```
 
 [init-standby.sh](./docker/hot_standby/init/init-standby.sh)
@@ -375,9 +384,38 @@ PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby bash /ho
 (7 rows)
 ```
 
-Переводим стендбай в режим мастера:
+При работающем стендбае запустим скрипт автоматического promote:
 ```bash
-docker exec -it hot_standby psql -U postgres -c "select pg_promote();"
+docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh"
+```
+
+[auto_promote.sh](./docker/hot_standby/scripts/auto_promote.sh)
+```bash
+#!/bin/bash
+set -e
+
+MASTER_HOST="master"
+CHECK_INTERVAL=5
+ONLINE_SERVICES=("1.1.1.1" "google.com" "8.8.8.8" "yandex.ru")
+
+while true; do
+  if ! ping -c 1 "$MASTER_HOST" &> /dev/null; then
+    echo "Master isn't available. Checking online services..."
+    for service in "${ONLINE_SERVICES[@]}"; do
+      if ping -c 1 "$service" &> /dev/null; then
+        echo "Service $service is reachable. Promoting standby."
+        psql -U postgres -c "SELECT pg_promote();"
+        exit 0
+      else
+        echo "Service $service is unreachable."
+      fi
+    done
+    echo "No online services reachable. Retrying in $CHECK_INTERVAL seconds."
+  else
+    echo "Master is connected."
+  fi
+  sleep "$CHECK_INTERVAL"
+done
 ```
 
 Проверим чтение и запись на стендбае после promote:

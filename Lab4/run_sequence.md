@@ -27,6 +27,10 @@ docker restart master
 ```bash
 docker-compose up -d --build hot_standby
 ```
+При работающем стендбае запустим скрипт автоматического promote:
+```bash
+docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh"
+```
 
 ## Проверка
 
@@ -69,12 +73,7 @@ docker exec -it hot_standby bash /home/scripts/read_client.sh
 
 ## Обработка
 
-Переводим стендбай в режим мастера:
-```bash
-docker exec -it hot_standby psql -U postgres -c "select pg_promote();"
-```
-
-Проверим чтение и запись на стендбае после promote:
+Проверим чтение и запись на стендбае после promote (автоматический):
 ```bash
 docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie');"
 docker exec -it hot_standby psql -U postgres -d test -c "SELECT * FROM users;"
