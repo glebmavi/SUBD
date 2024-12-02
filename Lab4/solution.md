@@ -84,14 +84,17 @@ FROM postgres:latest
 
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
-COPY init/init-master.sh /docker-entrypoint-initdb.d/init-master.sh
-COPY scripts/init-db.sql /docker-entrypoint-initdb.d/init-db.sql
-RUN chmod +x /docker-entrypoint-initdb.d/init-master.sh
+COPY init/init-master.sh /home/init/init-master.sh
+COPY scripts/init-db.sql /home/scripts/init-db.sql
+COPY scripts/read_client.sh /home/scripts/read_client.sh
+COPY scripts/write_client.sh /home/scripts/write_client.sh
+RUN chmod +x /home/scripts/read_client.sh
+RUN chmod +x /home/scripts/write_client.sh
+RUN chmod +x /home/init/init-master.sh
 ```
 
 [init-master.sh](./docker/master/init/init-master.sh)
 ```bash
-#!/bin/bash
 #!/bin/bash
 set -e
 
@@ -99,14 +102,12 @@ set -e
 psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
 
 # DB init and populate
-psql -v ON_ERROR_STOP=1 --username "postgres" -f "/docker-entrypoint-initdb.d/init-db.sql"
+psql -v ON_ERROR_STOP=1 --username "postgres" -f "/home/scripts/init-db.sql"
 
 # Copy conf files
 cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"
 cp /etc/postgresql/pg_hba.conf "$PGDATA/pg_hba.conf"
-
-# Restart
-pg_ctl -D "$PGDATA" -m fast -w restart
+echo "Conf files copied"
 ```
 
 [postgresql.conf](./docker/master/conf/postgresql.conf)
@@ -118,13 +119,10 @@ max_wal_senders = 10
 max_replication_slots = 10
 archive_mode = on
 archive_command = 'echo "dummy command, archive_command called"'
-log_destination = 'jsonlog'
-logging_collector = on
 log_connections = on
 log_disconnections = on
 log_duration = on
-log_directory = 'pg_log'
-log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+wal_log_hints = on
 ```
 
 [pg_hba.conf](./docker/master/conf/pg_hba.conf)
@@ -143,6 +141,8 @@ FROM postgres:latest
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-standby.sh /docker-entrypoint-initdb.d/init-standby.sh
+COPY scripts/read_client.sh /home/scripts/read_client.sh
+RUN chmod +x /home/scripts/read_client.sh
 RUN chmod +x /docker-entrypoint-initdb.d/init-standby.sh
 ```
 
@@ -185,14 +185,21 @@ pg_ctl -D "$PGDATA" start
 
 [postgresql.conf](./docker/hot_standby/conf/postgresql.conf)
 ```conf
+listen_addresses = '*'
 hot_standby = on
 primary_conninfo = 'host=master port=5432 user=replicator password=replicator_password'
+wal_log_hints = on
+log_connections = on
+log_disconnections = on
+log_duration = on
+wal_log_hints = on
 ```
 
 [pg_hba.conf](./docker/hot_standby/conf/pg_hba.conf)
 ```conf
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   all             all                                     trust
+host    all             postgres        0.0.0.0/0               md5
 host    replication     replicator      0.0.0.0/0               md5
 host    all             all             0.0.0.0/0               md5
 ```
@@ -200,7 +207,7 @@ host    all             all             0.0.0.0/0               md5
 ### Запуск
 
 Очистка данных
-(Может понадобится при повторном запуске)
+(Может понадобится при повторном запуске) (Запуск внутри папки docker)
 ```bash
 Remove-Item -Path .\master\data\*, .\hot_standby\data\* -Recurse -Force
 ```
@@ -220,7 +227,6 @@ docker restart master
 ```bash
 docker-compose up -d --build hot_standby
 ```
-Remove-Item -Path .\hot_standby\data\* -Recurse -Force
 
 ### Наполнение базы
 На примере не менее, чем двух таблиц, столбцов, строк, транзакций и клиентских сессий:
@@ -306,7 +312,7 @@ while true; do
     items=("TV" "Mouse" "Keyboard" "HDMI cable")
     random_item=${items[$RANDOM % ${#items[@]}]}
     last_user_id=$(psql -U postgres -d test -t -c "SELECT id FROM users ORDER BY id DESC LIMIT 1;")
-    psql -U postgres -d test -c "INSERT INTO orders (user_id, item) VALUES ($last_user_id, '$random_item');"
+    psql -U postgres -d test -c "INSERT INTO orders (user_id, product) VALUES ($last_user_id, '$random_item');"
     sleep 2
 done
 ```
@@ -406,26 +412,44 @@ docker network connect docker_pg_net master
 ```bash
 docker exec -it master bash
 ```
-
+В консоли мастера:
 ```bash
 su postrges
 ```
 ```bash
 pg_basebackup -P -X stream -c fast -h hot_standby -U replicator -D ~/backup
+# password: replicator_password
 rm -rf /var/lib/postgresql/data/*
 mv ~/backup/* /var/lib/postgresql/data/
 ```
+Выходим из контейнера мастера.
+
 
 ```bash
 docker exec -it hot_standby bash
 ```
+В консоли стендбая:
 ```bash
 touch /var/lib/postgresql/data/standby.signal
 ```
-  
+Выходим из контейнера стендбая.
+
+Останавливаем стендбай:
 ```bash
-docker-compose up master
+docker-compose stop hot_standby
+Remove-Item -Path .\hot_standby\data\* -Recurse -Force
 ```
+
+Заново запускаем мастера:
+```bash
+docker-compose up -d master
+```
+
+Пересоздаем стендбай чтобы заново стал hot_standby:
+```bash
+docker-compose up -d --build hot_standby
+```
+
 
 Проверяем:
 ```bash
