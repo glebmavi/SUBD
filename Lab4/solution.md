@@ -1,4 +1,6 @@
-Структура:
+Для последовательности действий, необходимых для выполнения, см. [run_sequence.md](./run_sequence.md)
+
+## Структура:
 ```
 │   docker-compose.yml
 │
@@ -81,7 +83,7 @@ networks:
 [Dockefile](./docker/master/Dockerfile)
 ```Dockerfile
 FROM postgres:latest
-
+RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lists/*
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-master.sh /home/init/init-master.sh
@@ -137,7 +139,7 @@ host    all             all             0.0.0.0/0               md5
 [Dockefile](./docker/hot_standby/Dockerfile)
 ```Dockerfile
 FROM postgres:latest
-
+RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lists/*
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-standby.sh /docker-entrypoint-initdb.d/init-standby.sh
