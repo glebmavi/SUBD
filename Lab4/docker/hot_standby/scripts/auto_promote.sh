@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 MASTER_HOST="master"
 CHECK_INTERVAL=5

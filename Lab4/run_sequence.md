@@ -22,7 +22,7 @@ docker-compose up -d --build hot_standby
 Ожидаем
 При работающем стендбае запустим скрипт автоматического promote:
 ```bash
-docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh"
+docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh master"
 ```
 
 ## Проверка
@@ -84,6 +84,7 @@ docker restart master
 Проверяем:
 ```bash
 docker exec -it master bash /home/scripts/read_client.sh
-docker exec -it master bash /home/scripts/write_client.sh
+docker exec -it master bash /home/scripts/write_client.sh # Не должно работать
 docker exec -it hot_standby bash /home/scripts/read_client.sh
+docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie2');" # Должно работать
 ```

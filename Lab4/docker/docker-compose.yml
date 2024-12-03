@@ -2,7 +2,7 @@ services:
   master:
     container_name: master
     build:
-      context: ./master
+      context: ./template
     restart: unless-stopped
     ports:
       - "9001:5432"
@@ -12,6 +12,8 @@ services:
       - PGLOCALE=en_US.UTF8
       - PGUSERNAME=postgres
       - POSTGRES_PASSWORD=postgres
+    entrypoint: ["/home/scripts/custom-entrypoint.sh"]
+    command: ["hot_standby", "master"]
     volumes:
       - ./master/data:/var/lib/postgresql/data
     networks:
@@ -20,7 +22,7 @@ services:
   hot_standby:
     container_name: hot_standby
     build:
-      context: ./hot_standby
+      context: ./template
     restart: unless-stopped
     ports:
       - "9002:5432"
@@ -32,6 +34,8 @@ services:
       - PGLOCALE=en_US.UTF8
       - PGUSERNAME=postgres
       - POSTGRES_PASSWORD=postgres
+    entrypoint: ["/home/scripts/custom-entrypoint.sh"]
+    command: ["master", "hot_standby"]
     volumes:
       - ./hot_standby/data:/var/lib/postgresql/data
     networks:
