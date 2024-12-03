@@ -2,7 +2,7 @@
 set -e
 
 # Replicator role
-psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
+psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH SUPERUSER REPLICATION PASSWORD 'replicator_password' LOGIN;"
 
 # DB init and populate
 psql -v ON_ERROR_STOP=1 --username "postgres" -f "/home/scripts/init-db.sql"

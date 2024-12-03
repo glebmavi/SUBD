@@ -31,3 +31,11 @@ echo "Conf files copied"
 
 # Start the server
 pg_ctl -D "$PGDATA" start
+
+# Wait for master to be ready
+until pg_isready -h master -p 5432 -U postgres; do
+  echo "Waiting for master to be ready..."
+  sleep 1
+done
+
+echo "Hot standby is now running"

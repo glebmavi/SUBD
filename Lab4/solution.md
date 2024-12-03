@@ -31,6 +31,7 @@
     │       init-master.sh
     │
     └───scripts
+            custom-entrypoint.sh
             init-db.sql
             read_client.sh
             write_client.sh
@@ -89,16 +90,145 @@ networks:
 [Dockefile](./docker/master/Dockerfile)
 ```Dockerfile
 FROM postgres:latest
-RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y iputils-ping
+
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-master.sh /home/init/init-master.sh
 COPY scripts/init-db.sql /home/scripts/init-db.sql
 COPY scripts/read_client.sh /home/scripts/read_client.sh
 COPY scripts/write_client.sh /home/scripts/write_client.sh
+
+COPY scripts/custom-entrypoint.sh /home/scripts/custom-entrypoint.sh
+RUN chmod +x /home/scripts/custom-entrypoint.sh
+
 RUN chmod +x /home/scripts/read_client.sh
 RUN chmod +x /home/scripts/write_client.sh
 RUN chmod +x /home/init/init-master.sh
+
+ENTRYPOINT ["/home/scripts/custom-entrypoint.sh"]
+CMD ["postgres"]
+```
+
+[custom-entrypoint.sh](./docker/master/scripts/custom-entrypoint.sh)
+```bash
+#!/bin/bash
+set -e
+
+# Function to check internet connectivity
+check_internet() {
+    ONLINE_SERVICES=("1.1.1.1" "google.com" "8.8.8.8" "yandex.ru")
+    for service in "${ONLINE_SERVICES[@]}"; do
+        if ping -c 1 "$service" &> /dev/null; then
+            echo "Service $service is reachable."
+            return 0
+        else
+            echo "Service $service is unreachable."
+        fi
+    done
+    return 1
+}
+
+# Function to check if we can resolve and connect to hot_standby
+check_hot_standby() {
+    if ping -c 1 "hot_standby" &> /dev/null; then
+        echo "hot_standby is reachable."
+        return 0
+    else
+        echo "Cannot reach hot_standby."
+        return 1
+    fi
+}
+
+# Initialize variables
+PGPASSWORD="replicator_password"
+
+# Check if PGDATA is empty (first-time setup)
+if [ -z "$(ls -A "$PGDATA")" ]; then
+    echo "Data directory is empty. Initializing database..."
+    
+    # Initialize the database using the original entrypoint script
+    /usr/local/bin/docker-entrypoint.sh postgres &
+    pid="$!"
+
+    # Wait for PostgreSQL to start
+    until pg_isready -h localhost -p 5432 -U postgres; do
+        echo "Waiting for PostgreSQL to start..."
+        sleep 1
+    done
+
+    # Run the init-master.sh script
+    /home/init/init-master.sh
+
+    # Stop PostgreSQL after initialization
+    kill "$pid"
+    wait "$pid" || true
+
+    echo "Database initialized. Proceeding to start PostgreSQL normally."
+fi
+
+echo "Data directory exists. Checking if pg_rewind is needed..."
+
+# Wait until we have internet connectivity
+until check_internet; do
+    echo "No internet connectivity. Waiting..."
+    sleep 5
+done
+
+# Check if we can resolve and connect to hot_standby
+if ! check_hot_standby; then
+    echo "Cannot reach hot_standby. Assuming no pg_rewind is needed. Starting normally."
+    exec /usr/local/bin/docker-entrypoint.sh postgres
+fi
+
+# Get the current timeline ID from pg_controldata
+CURRENT_TLI=$(pg_controldata "$PGDATA" | grep '\sTimeLineID:' | sed 's/.*TimeLineID: *//')
+
+# Try to get the new primary's timeline ID
+NEW_PRIMARY_TLI=$(PGPASSWORD="replicator_password" psql -h hot_standby -U replicator -d postgres -Atc "SELECT timeline_id FROM pg_control_checkpoint();" || true)
+
+if [ -z "$NEW_PRIMARY_TLI" ]; then
+    echo "Cannot retrieve timeline ID from new primary. Starting as primary."
+    exec /usr/local/bin/docker-entrypoint.sh postgres
+fi
+
+echo "Current timeline ID: $CURRENT_TLI"
+echo "New primary timeline ID: $NEW_PRIMARY_TLI"
+
+if [ "$NEW_PRIMARY_TLI" -gt "$CURRENT_TLI" ]; then
+    echo "New primary has a higher timeline ID. Performing pg_rewind..."
+
+    # Ensure the server is stopped
+    if [ -f "$PGDATA/postmaster.pid" ]; then
+        echo "Stopping PostgreSQL server..."
+        kill $(head -1 "$PGDATA/postmaster.pid") || true
+        sleep 5
+    fi
+
+    # Remove leftover PID file
+    rm -f "$PGDATA/postmaster.pid"
+
+    # Perform pg_rewind
+    su postgres -c 'pg_rewind --target-pgdata="$PGDATA" --source-server="host=hot_standby port=5432 dbname=postgres user=replicator password=replicator_password"'
+
+    # Update configuration files
+    cp /etc/postgresql/postgresql.conf "$PGDATA/postgresql.conf"
+    cp /etc/postgresql/pg_hba.conf "$PGDATA/pg_hba.conf"
+
+    # Set primary_conninfo in postgresql.conf
+    echo "primary_conninfo = 'host=hot_standby port=5432 user=replicator password=replicator_password'" >> "$PGDATA/postgresql.conf"
+
+    # Create standby.signal file
+    touch "$PGDATA/standby.signal"
+
+    chown -R postgres:postgres "$PGDATA"
+
+    echo "pg_rewind completed. Starting as standby."
+fi
+
+# Start PostgreSQL using the original entrypoint script
+exec /usr/local/bin/docker-entrypoint.sh postgres
 ```
 
 [init-master.sh](./docker/master/init/init-master.sh)
@@ -107,7 +237,7 @@ RUN chmod +x /home/init/init-master.sh
 set -e
 
 # Replicator role
-psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH REPLICATION PASSWORD 'replicator_password' LOGIN;"
+psql -v ON_ERROR_STOP=1 --username "postgres" -c "CREATE ROLE replicator WITH SUPERUSER REPLICATION PASSWORD 'replicator_password' LOGIN;"
 
 # DB init and populate
 psql -v ON_ERROR_STOP=1 --username "postgres" -f "/home/scripts/init-db.sql"
@@ -131,6 +261,7 @@ log_connections = on
 log_disconnections = on
 log_duration = on
 wal_log_hints = on
+
 ```
 
 [pg_hba.conf](./docker/master/conf/pg_hba.conf)
@@ -145,6 +276,9 @@ host    all             all             0.0.0.0/0               md5
 [Dockefile](./docker/hot_standby/Dockerfile)
 ```Dockerfile
 FROM postgres:latest
+
+RUN apt-get update && apt-get install -y iputils-ping
+
 COPY conf/postgresql.conf /etc/postgresql/postgresql.conf
 COPY conf/pg_hba.conf /etc/postgresql/pg_hba.conf
 COPY init/init-standby.sh /docker-entrypoint-initdb.d/init-standby.sh
@@ -153,8 +287,6 @@ COPY scripts/auto_promote.sh /home/scripts/auto_promote.sh
 RUN chmod +x /home/scripts/read_client.sh
 RUN chmod +x /docker-entrypoint-initdb.d/init-standby.sh
 RUN chmod +x /home/scripts/auto_promote.sh
-
-RUN apt-get update && apt-get install -y iputils-ping
 ```
 
 [init-standby.sh](./docker/hot_standby/init/init-standby.sh)
@@ -192,6 +324,14 @@ echo "Conf files copied"
 
 # Start the server
 pg_ctl -D "$PGDATA" start
+
+# Wait for master to be ready
+until pg_isready -h master -p 5432 -U postgres; do
+  echo "Waiting for master to be ready..."
+  sleep 1
+done
+
+echo "Hot standby is now running"
 ```
 
 [postgresql.conf](./docker/hot_standby/conf/postgresql.conf)
@@ -228,16 +368,47 @@ Remove-Item -Path .\master\data\*, .\hot_standby\data\* -Recurse -Force
 docker-compose up -d --build master
 ```
 
-Запуск init-master.sh
-```bash
-docker exec -it master bash -c "/home/init/init-master.sh"
-docker restart master
-```
+Ожидаем лога `database system is ready to accept connections`
 
 Запуск hot_standby
 ```bash
 docker-compose up -d --build hot_standby
 ```
+Ожидаем
+При работающем стендбае запустим скрипт автоматического promote:
+```bash
+docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh"
+```
+
+[auto_promote.sh](./docker/hot_standby/scripts/auto_promote.sh)
+```bash
+#!/bin/bash
+set -e
+
+MASTER_HOST="master"
+CHECK_INTERVAL=5
+ONLINE_SERVICES=("1.1.1.1" "google.com" "8.8.8.8" "yandex.ru")
+
+while true; do
+  if ! ping -c 1 "$MASTER_HOST" &> /dev/null; then
+    echo "Master isn't available. Checking online services..."
+    for service in "${ONLINE_SERVICES[@]}"; do
+      if ping -c 1 "$service" &> /dev/null; then
+        echo "Service $service is reachable. Promoting standby."
+        psql -U postgres -c "SELECT pg_promote();"
+        exit 0
+      else
+        echo "Service $service is unreachable."
+      fi
+    done
+    echo "No online services reachable. Retrying in $CHECK_INTERVAL seconds."
+  else
+    echo "Master is connected."
+  fi
+  sleep "$CHECK_INTERVAL"
+done
+```
+
 
 ### Наполнение базы
 На примере не менее, чем двух таблиц, столбцов, строк, транзакций и клиентских сессий:
@@ -355,12 +526,6 @@ docker network disconnect docker_pg_net master
 
 ### 2.3 Обработка
 
-В стандбае видим логи:
-```
-2024-11-26 12:28:45 2024-11-26 09:28:45.898 GMT [190] FATAL:  could not connect to the primary server: could not translate host name "master" to address: Temporary failure in name resolution
-2024-11-26 12:28:53 2024-11-26 09:28:53.908 GMT [191] FATAL:  could not connect to the primary server: could not translate host name "master" to address: Temporary failure in name resolution
-```
-
 При этом чтение работает:
 ```bash
 docker exec -it hot_standby bash /home/scripts/read_client.sh
@@ -384,39 +549,6 @@ PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby bash /ho
 (7 rows)
 ```
 
-При работающем стендбае запустим скрипт автоматического promote:
-```bash
-docker exec -d hot_standby bash -c "/home/scripts/auto_promote.sh"
-```
-
-[auto_promote.sh](./docker/hot_standby/scripts/auto_promote.sh)
-```bash
-#!/bin/bash
-set -e
-
-MASTER_HOST="master"
-CHECK_INTERVAL=5
-ONLINE_SERVICES=("1.1.1.1" "google.com" "8.8.8.8" "yandex.ru")
-
-while true; do
-  if ! ping -c 1 "$MASTER_HOST" &> /dev/null; then
-    echo "Master isn't available. Checking online services..."
-    for service in "${ONLINE_SERVICES[@]}"; do
-      if ping -c 1 "$service" &> /dev/null; then
-        echo "Service $service is reachable. Promoting standby."
-        psql -U postgres -c "SELECT pg_promote();"
-        exit 0
-      else
-        echo "Service $service is unreachable."
-      fi
-    done
-    echo "No online services reachable. Retrying in $CHECK_INTERVAL seconds."
-  else
-    echo "Master is connected."
-  fi
-  sleep "$CHECK_INTERVAL"
-done
-```
 
 Проверим чтение и запись на стендбае после promote:
 ```bash
@@ -446,54 +578,15 @@ PS C:\IMPRIMIR\3kurs\5Sem\SUBD\Lab4\docker> docker exec -it hot_standby psql -U 
 Включаем сеть мастера:
 ```bash
 docker network connect docker_pg_net master
+docker restart master
 ```
 
-Восстанавливаем работу мастера:
-```bash
-docker exec -it master bash
-```
-В консоли мастера:
-```bash
-su postrges
-```
-```bash
-pg_basebackup -P -X stream -c fast -h hot_standby -U replicator -D ~/backup
-# password: replicator_password
-rm -rf /var/lib/postgresql/data/*
-mv ~/backup/* /var/lib/postgresql/data/
-```
-Выходим из контейнера мастера.
-
-
-```bash
-docker exec -it hot_standby bash
-```
-В консоли стендбая:
-```bash
-touch /var/lib/postgresql/data/standby.signal
-```
-Выходим из контейнера стендбая.
-
-Останавливаем стендбай:
-```bash
-docker-compose stop hot_standby
-Remove-Item -Path .\hot_standby\data\* -Recurse -Force
-```
-
-Заново запускаем мастера:
-```bash
-docker-compose up -d master
-```
-
-Пересоздаем стендбай чтобы заново стал hot_standby:
-```bash
-docker-compose up -d --build hot_standby
-```
-
+Ожидаем лога `database system is ready to accept read-only connections`
 
 Проверяем:
 ```bash
 docker exec -it master bash /home/scripts/read_client.sh
-docker exec -it master bash /home/scripts/write_client.sh
+docker exec -it master bash /home/scripts/write_client.sh # Не должно работать
 docker exec -it hot_standby bash /home/scripts/read_client.sh
+docker exec -it hot_standby psql -U postgres -d test -c "INSERT INTO users (name) VALUES ('Charlie2');" # Должно работать
 ```
